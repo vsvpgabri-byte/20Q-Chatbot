@@ -1,0 +1,2064 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>20Q-Chatbot</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 760px; margin: auto; padding: 20px; color: #222; }
+  h2 { margin-bottom: 4px; }
+  .subtitle { color: #666; margin-top: 0; font-size: 14px; }
+  fieldset { border: 1px solid #ccc; border-radius: 8px; padding: 14px 18px; margin-bottom: 16px; }
+  legend { font-weight: bold; padding: 0 6px; }
+  label { display: block; margin-top: 10px; font-size: 14px; }
+  select, input[type=password], input[type=text] { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+  button { padding: 13px 18px; margin-top: 12px; margin-right: 8px; cursor: pointer; border: none; border-radius: 6px; background: #3a5a78; color: white; font-size: 15px; min-height: 44px; }
+  button:disabled { background: #aab8c2; cursor: not-allowed; }
+  button.secondary { background: #6c757d; }
+  #chat { white-space: pre-wrap; border: 1px solid #ccc; border-radius: 8px; padding: 12px; height: 340px; overflow-y: scroll; background: #fafafa; margin-top: 10px; }
+  .msg-kind { color: #1a1a1a; }
+  .msg-coach { color: #3a5a78; font-weight: bold; }
+  .msg-system { color: #a33a3a; font-style: italic; }
+  #inputRow { display: flex; gap: 8px; margin-top: 10px; }
+  #questionInput { flex: 1; padding: 10px; }
+  #status { font-size: 13px; color: #555; margin-top: 6px; }
+  #summary { border: 1px solid #3a5a78; border-radius: 8px; padding: 14px 18px; margin-top: 16px; background: #eef3f8; display: none; }
+  #summary table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  #summary td { padding: 4px 6px; font-size: 14px; }
+  #summary td:first-child { color: #444; }
+  #summary td:last-child { text-align: right; font-weight: bold; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<h2>🎓 20Q-Chatbot</h2>
+<p class="subtitle" id="appSubtitle">20-Fragen-Spiel · Training mit Coaching</p>
+
+<!-- SETUP -->
+<fieldset id="setupBox">
+  <legend>Einrichtung</legend>
+
+  <label for="apiKey">OpenAI API-Key</label>
+  <input type="password" id="apiKey" placeholder="sk-...">
+
+  <label for="difficultySlider">Schwierigkeitsgrad: <span id="difficultyLabel"></span></label>
+  <input type="range" id="difficultySlider" min="0" max="4" step="1" value="0" oninput="updateDifficultyLabel()">
+  <div id="difficultyHint" style="font-size:12px; color:#777; margin-top:2px;"></div>
+
+  <label for="childName">Kürzel (für den Export, max. 2 Zeichen)</label>
+  <input type="text" id="childName" maxlength="2" placeholder="z. B. LM" autocomplete="off" autocapitalize="characters" style="width:5em; text-align:center;">
+
+  <button onclick="startRound()" id="startBtn">Training starten</button>
+</fieldset>
+
+<!-- GAME -->
+<div id="gameBox" class="hidden">
+  <div id="botAvatar" style="font-size:40px; text-align:center; transition: transform 0.2s;">🤖</div>
+  <div id="progressBarOuter" style="width:100%; height:10px; background:#e2e8ee; border-radius:6px; overflow:hidden; margin-bottom:8px;">
+    <div id="progressBarInner" style="width:0%; height:100%; background:#3a5a78; transition: width 0.4s ease;"></div>
+  </div>
+  <div id="chat"></div>
+  <div id="inputRow">
+    <input type="text" id="questionInput" placeholder="Stelle deine Ja/Nein-Frage..." onkeydown="if(event.key==='Enter') send()">
+    <button onclick="send()" id="sendBtn">Fragen</button>
+  </div>
+  <div id="status"></div>
+  <button class="secondary" onclick="toggleList()" id="listToggleBtn">📋 Liste anzeigen</button>
+  <button class="secondary hidden" onclick="explainLastClassification()" id="debugBtn">🔍 Warum diese Antwort? (Debug)</button>
+  <div id="candidateList" style="display:none; margin-top:10px; padding:10px; border:1px solid #3a5a78; border-radius:6px; background:#f4f7fa; font-size:14px;"></div>
+  <button class="secondary" onclick="endRound(false, 'manuell_beendet')">Runde manuell beenden</button>
+  <div style="margin-top:14px; text-align:right;">
+    <a href="#" onclick="unlockTeacherMode(); return false;" style="font-size:11px; color:#bbb; text-decoration:none;">🔧</a>
+  </div>
+</div>
+
+<!-- SUMMARY -->
+<div id="summary">
+  <h3 id="summaryHeading">Auswertung</h3>
+  <div id="congratsBanner" style="display:none; font-size:18px; font-weight:bold; color:#2d6a2d; background:#eaf7ea; border:1px solid #2d6a2d; border-radius:6px; padding:10px 14px; margin-bottom:10px;"></div>
+  <table id="summaryTable"></table>
+
+  <div id="feedbackSection" style="margin-top:14px; margin-bottom:14px; padding:12px; border:1px solid #3a5a78; border-radius:8px; background:#f4f7fa;">
+    <label for="feedbackInput" style="display:block; font-weight:bold; margin-bottom:6px;">Ist dir in dieser Runde etwas aufgefallen, das falsch war oder dir nicht gefallen hat?</label>
+    <textarea id="feedbackInput" rows="3" style="width:100%; padding:8px; box-sizing:border-box; font-family:inherit; font-size:14px; border:1px solid #ccc; border-radius:6px;" placeholder="z. B. Eine Antwort war falsch, eine Frage war komisch, ... (kannst du auch leer lassen)"></textarea>
+    <div style="margin-top:8px;">
+      <button onclick="submitRoundFeedback()" id="feedbackSaveBtn">Feedback speichern</button>
+      <span id="feedbackSavedNote" style="display:none; color:#2d6a2d; margin-left:10px; font-weight:bold;">✓ Gespeichert, danke!</span>
+    </div>
+  </div>
+
+  <!-- VERSION 59: Der Gesamt-Export ist die einzige Export-Option.
+       Er enthält alles aus den früheren Exporten "CSV exportieren" und
+       "Coaching-Log exportieren" (die Funktionen sind im Code noch
+       vorhanden, aber ohne Knopf). -->
+  <button onclick="downloadFullCSV()">CSV exportieren</button>
+  <button class="secondary hidden" onclick="showChatReview()" id="chatReviewBtn">🔍 Chatverlauf ansehen (für Fehlermeldungen)</button>
+  <button class="secondary" onclick="resetAll()">Neue Runde</button>
+  <div style="margin-top:14px; text-align:right;">
+    <a href="#" onclick="unlockTeacherMode(); return false;" style="font-size:11px; color:#bbb; text-decoration:none;">🔧</a>
+  </div>
+</div>
+
+<!-- CHAT-RÜCKBLICK (read-only, nach Rundenende) -->
+<div id="chatReview" class="hidden">
+  <h3>Chatverlauf (Rückblick)</h3>
+  <p style="font-size:13px; color:#666;">Rote Zeilen markieren Systemfehler. Notiere dir die betroffene Frage für die Fehlermeldung.</p>
+  <div id="chatReviewContent" style="white-space:pre-wrap; border:1px solid #ccc; border-radius:8px; padding:12px; max-height:400px; overflow-y:scroll; background:#fafafa;"></div>
+  <button class="secondary" onclick="hideChatReview()">⬅ Zurück zur Auswertung</button>
+</div>
+
+
+<script>
+/* ---------- Absicherung für eingeschränkte Viewer (z. B. HTML-Viewer-Apps auf dem iPad) ----------
+   Manche Viewer-Apps stellen kein vollständiges "console"-Objekt bereit.
+   Dann scheitert jeder Aufruf von console.error() selbst – ausgerechnet
+   in den Fehler-Abfangblöcken, die eigentlich einen Ersatzwert liefern
+   sollten. Hier werden fehlende Funktionen durch "stille" Platzhalter
+   ersetzt, damit die Fallbacks im ganzen Programm wieder greifen.
+------------------------------------------------------------------ */
+(function () {
+  try {
+    if (typeof window.console !== "object" || window.console === null) window.console = {};
+    ["log", "warn", "error", "info"].forEach(function (fn) {
+      if (typeof window.console[fn] !== "function") window.console[fn] = function () {};
+    });
+  } catch (e) { /* Viewer erlaubt kein Überschreiben – safeLog() unten fängt das ab */ }
+})();
+
+/* ---------- VERSION 60: sicheres Protokollieren ----------
+   Der Platzhalter oben hat im iPad-Viewer NICHT gegriffen (Daten
+   vom 28.10.2026: 24 % aller Eingaben endeten mit "console.error is
+   not a function"). Darum ruft das Programm console.error() nirgends
+   mehr direkt auf, sondern nur noch safeLog(). safeLog() kann
+   unter keinen Umständen selbst einen Fehler auslösen.
+------------------------------------------------------------------ */
+function safeLog() {
+  try {
+    var c = (typeof console !== "undefined") ? console : null;
+    if (c && typeof c.error === "function") c.error.apply(c, arguments);
+  } catch (e) { /* bewusst leer */ }
+}
+
+/* ---------- VERSION 60: OpenAI-Aufruf mit automatischer Wiederholung ----------
+   Wenn ~20 Kinder gleichzeitig mit demselben API-Key spielen, meldet
+   OpenAI zeitweise "Rate limit" (HTTP 429) oder es gibt kurze
+   Netzwerkaussetzer. Statt sofort "Hoppla" zu zeigen, wird der Aufruf
+   bis zu 3-mal mit kurzer Wartezeit wiederholt. Gibt den Antworttext
+   der KI zurück oder wirft einen Fehler mit der ECHTEN Ursache
+   (erscheint im Export in der Zeile "System (nur Lehrperson)").
+------------------------------------------------------------------ */
+const API_MAX_ATTEMPTS = 3;
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+async function callOpenAI(messages, temperature) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= API_MAX_ATTEMPTS; attempt++) {
+    let retryable = true, waitMs = null;
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+        body: JSON.stringify({ model: "gpt-4o-mini", temperature: temperature == null ? 0 : temperature, messages })
+      });
+      let data = null;
+      try { data = await response.json(); } catch (e) { data = null; }
+      if (!response.ok || !data || data.error) {
+        const msg = (data && data.error && (data.error.message || data.error.type)) || "keine lesbare Antwort";
+        retryable = response.status === 429 || response.status >= 500 || !data;
+        const m = /try again in ([\d.]+)\s*(ms|s)\b/i.exec(msg);
+        if (m) waitMs = parseFloat(m[1]) * (m[2].toLowerCase() === "s" ? 1000 : 1);
+        throw new Error(`OpenAI-API-Fehler (HTTP ${response.status}): ${msg}`);
+      }
+      if (!data.choices || !data.choices[0] || !data.choices[0].message) throw new Error("Leere Antwort der KI");
+      return String(data.choices[0].message.content || "").trim();
+    } catch (err) {
+      lastErr = err;
+      if (!retryable || attempt === API_MAX_ATTEMPTS) break;
+      const backoff = waitMs != null ? Math.min(waitMs + 200, 8000) : 700 * Math.pow(2, attempt - 1) + Math.random() * 400;
+      try { statusDiv.textContent = "Der Coach überlegt noch …"; } catch (e) {}
+      await sleep(backoff);
+    }
+  }
+  const e = new Error(`${lastErr ? lastErr.message : "unbekannter Fehler"} (nach ${API_MAX_ATTEMPTS} Versuchen)`);
+  throw e;
+}
+/* ---------- Themenlisten ----------
+------------------------------------------------------------------ */
+const TOPICS = {
+  "Berufe": ["Lehrer","Arzt","Feuerwehrmann","Polizist","Koch","Bäcker","Pilot","Sänger","Bauer","Zahnarzt","Astronaut","Frisör","Elektriker","Gärtner","Tierarzt","Anwalt"],
+  "Fahrzeuge": ["Auto","Fahrrad","Motorrad","Bus","Zug","Flugzeug","Schiff","Boot","U-Boot","Hubschrauber","Traktor","Lastwagen","Roller","Skateboard","Schlitten","Kanu","Segelboot","Heissluftballon","Rakete","Zeppelin","Bagger","Trottinet","Feuerwehrauto","Krankenwagen","Polizeiauto","Müllwagen","Wohnmobil","Seilbahn","Kutsche","Rollstuhl","Dreirad","Rennwagen"],
+  "Tiere": ["Hund","Katze","Elefant","Löwe","Tiger","Pferd","Schwein","Kuh","Adler","Pinguin","Hai","Frosch","Schlange","Affe","Bär","Fuchs","Wolf","Hase","Igel","Eichhörnchen","Maus","Ratte","Biber","Otter","Reh","Hirsch","Wildschwein","Ziege","Schaf","Esel","Kamel","Giraffe","Zebra","Nashorn","Nilpferd","Gorilla","Schimpanse","Känguru","Koala","Panda","Waschbär","Dachs","Luchs","Puma","Leopard","Gepard","Hyäne","Krokodil","Schildkröte","Eidechse","Chamäleon","Spinne","Skorpion","Biene","Schmetterling","Krake","Delfin","Wal","Robbe","Papagei","Eule","Storch","Schwan","Huhn"],
+  "Lebensmittel": ["Apfel","Banane","Orange","Birne","Traube","Erdbeere","Himbeere","Kirsche","Pfirsich","Aprikose","Ananas","Mango","Kiwi","Zitrone","Melone","Pflaume","Heidelbeere","Brombeere","Granatapfel","Feige","Karotte","Kartoffel","Tomate","Gurke","Paprika","Zwiebel","Knoblauch","Broccoli","Blumenkohl","Kohl","Spinat","Salat","Erbse","Bohne","Mais","Kürbis","Rettich","Sellerie","Lauch","Aubergine","Pilz","Brot","Brötchen","Nudeln","Reis","Hafer","Gerste","Couscous","Kuchen","Keks","Waffel","Pfannkuchen","Croissant","Baguette","Toast","Müsli","Käse","Butter","Milch","Joghurt","Quark","Sahne","Ei","Eis","Wurst","Schinken","Speck","Fisch","Hähnchen","Steak","Lachs","Thunfisch","Garnele","Tofu","Schokolade","Popcorn","Chips","Pudding","Marzipan","Bonbon","Kaugummi","Lakritz","Gummibärchen","Donut","Muffin","Brezel","Honig","Marmelade","Nuss","Mandel","Walnuss","Erdnuss","Kastanie","Cashewkern","Pistazie","Wasser","Saft","Limonade","Tee","Kaffee","Kakao","Milchshake","Smoothie","Cola","Sprudel","Salz","Zucker","Mehl","Öl","Essig","Senf","Ketchup","Mayonnaise","Pfeffer","Zimt","Suppe","Pizza","Sandwich","Omelett","Burger","Hotdog","Currywurst","Döner","Falafel","Sushi","Lasagne","Risotto","Ravioli"],
+  "Gegenstände": ["Tisch","Stuhl","Bett","Sofa","Schrank","Regal","Lampe","Spiegel","Teppich","Vorhang","Kissen","Decke","Bank","Hocker","Kommode","Nachttisch","Bücherregal","Garderobe","Wäschekorb","Wanduhr","Teller","Tasse","Glas","Gabel","Messer","Löffel","Topf","Pfanne","Kessel","Toaster","Mixer","Kühlschrank","Herd","Backofen","Mikrowelle","Geschirrspüler","Sieb","Schneidebrett","Dose","Flasche","Korkenzieher","Reibe","Trichter","Waage","Thermoskanne","Zahnbürste","Seife","Handtuch","Shampoo","Kamm","Bürste","Rasierer","Föhn","Badewanne","Dusche","Waschbecken","Klopapier","Stift","Buntstift","Radiergummi","Lineal","Klebstoff","Schere","Buch","Heft","Ordner","Taschenrechner","Füller","Textmarker","Spitzer","Tafel","Kreide","Landkarte","Globus","Notizbuch","Kalender","Rucksack","Handy","Fernseher","Radio","Computer","Tastatur","Bildschirm","Kopfhörer","Kamera","Drucker","Batterie","Kabel","Stecker","Fernbedienung","Lautsprecher","Taschenlampe","Wecker","Uhr","Ladegerät","Hammer","Nagel","Schraube","Zange","Säge","Schraubenzieher","Bohrer","Leiter","Seil","Kette","Schloss","Eimer","Besen","Schaufel","Rechen","Gartenschlauch","Giesskanne","Werkzeugkasten","Puzzle","Würfel","Puppe","Teddybär","Legostein","Luftballon","Drachen","Ball","Kreisel","Springseil","Murmel","Brettspiel","Kartenspiel","Schaukel","Rutsche","Trampolin","Roller","Sandkasten","Schuh","Hut","Mütze","Schal","Handschuh","Gürtel","Krawatte","Brille","Regenschirm","Tasche","Portemonnaie","Ring","Armband","Sonnenbrille","Stiefel","Sandale","Jacke","Hose","Hemd","Pullover","Socke","Schläger","Netz","Helm","Skier","Snowboard","Schlittschuh","Trikot","Turnschuh","Hantel","Gitarre","Klavier","Trommel","Flöte","Geige","Trompete","Schlagzeug","Mundharmonika","Xylophon","Triangel","Zelt","Schlafsack","Kompass","Fernglas","Lupe","Grill","Feuerzeug","Streichholz","Kerze","Vase","Korb","Sack","Kiste","Karton","Tüte","Beutel","Koffer","Briefkasten","Briefumschlag","Briefmarke","Zeitung","Zeitschrift","Poster","Ausweis","Schlüssel","Münze","Geldnote","Tagebuch","Portfolio","Aktenkoffer","Locher","Hefter","Büroklammer","Pinnwand","Whiteboard","Marker","Radierstift","Trillerpfeife","Etui","Federmäppchen","Turnbeutel","Trinkflasche","Brotdose","Thermosflasche","Regenjacke","Gummistiefel","Sonnenhut","Badeanzug","Schwimmflügel","Taucherbrille","Schnorchel","Flossen","Surfbrett","Angel","Kescher","Fahrradhelm","Fahrradschloss","Klingel","Luftpumpe","Ölkanne","Schraubenschlüssel","Wasserwaage","Zollstock","Cutter","Pinsel","Farbe","Leinwand","Staffelei","Skizzenbuch","Klarsichtfolie","Sanduhr","Wäscheklammer","Zirkel","Geodreieck","A4-Papier","Bügelbrett","Akte","Stempel","Stempelkissen","Siegel","Wachs","Kordel","Klebstreifen","Geschenkpapier","Schleife"]
+};
+
+/* Reihenfolge der Themen = Schwierigkeitsgrad (aufsteigend, Suchraum verdoppelt sich jeweils) */
+const DIFFICULTIES = [
+  { topic: "Berufe",       label: "Einfach",         icon: "👔" },
+  { topic: "Fahrzeuge",    label: "Leicht",          icon: "🚗" },
+  { topic: "Tiere",        label: "Mittelschwer",    icon: "🐾" },
+  { topic: "Lebensmittel", label: "Anspruchsvoll", icon: "🍎" },
+  { topic: "Gegenstände",  label: "Schwer",          icon: "📦" }
+];
+
+// Max. aufeinanderfolgende Coaching-Eingriffe (Runde 2) pro Frage-Slot,
+// bevor die Frage trotzdem durchgelassen wird.
+const INTERVENTION_LIMIT = 2;
+
+/* ---------- Lehrperson-Zugang für Debug-Funktionen ----------
+   "Warum diese Antwort?" und "Chatverlauf ansehen" sind für den
+   Prototyp-/Testbetrieb gedacht, nicht für die SuS im normalen
+   Ablauf. Sie sind standardmässig versteckt und werden nur nach
+   Eingabe der PIN über den kleinen 🔧-Link sichtbar. WICHTIG: Das
+   ist nur ein Schutz gegen zufälliges Anklicken durch Kinder, keine
+   echte Sicherheit – die PIN steht im Klartext im Quellcode.
+------------------------------------------------------------------ */
+const TEACHER_PIN = "2580";
+let teacherModeUnlocked = false;
+
+function unlockTeacherMode() {
+  if (teacherModeUnlocked) return;
+  const input = prompt("PIN für Lehrpersonen-Ansicht eingeben:");
+  if (input === TEACHER_PIN) {
+    teacherModeUnlocked = true;
+    document.getElementById("debugBtn").classList.remove("hidden");
+    document.getElementById("chatReviewBtn").classList.remove("hidden");
+    // Auch bereits vorhandene 🔍-Icons bei früheren Fragen sichtbar machen
+    // (z. B. wenn die PIN erst nach mehreren Fragen eingegeben wird).
+    document.querySelectorAll(".teacher-icon").forEach(el => el.classList.remove("hidden"));
+  } else if (input !== null) {
+    alert("Falsche PIN.");
+  }
+}
+
+/* ---------- API-Key-Format prüfen ----------
+   HTTP-Header (hier: Authorization) dürfen nur druckbare
+   ISO-8859-1/ASCII-Zeichen enthalten. Enthält der eingefügte Key
+   z. B. ein unsichtbares Sonderzeichen oder eine "intelligente"
+   Anführungszeichen-Variante (oft durch Kopieren aus Notiz-Apps
+   mit Autokorrektur), schlägt fetch() sonst erst mitten im Spiel
+   mit einer kryptischen Meldung fehl. Hier wird das vorab geprüft.
+------------------------------------------------------------------ */
+function isValidApiKeyFormat(key) {
+  return /^[\x20-\x7E]+$/.test(key);
+}
+
+/* ---------- Faktentabelle: Studium nötig? (nur Berufe) ----------
+   Bei nur 16 Berufen lässt sich diese Eigenschaft fest hinterlegen,
+   statt sie der KI bei jeder Frage neu (und manchmal falsch, z. B.
+   Elektriker) einschätzen zu lassen. Wird nur eingespeist, wenn die
+   Frage tatsächlich nach "studieren"/"Studium" fragt.
+   Hinweis: Einschätzung für den Schweizer Kontext (Studium =
+   Universität/ETH/Fachhochschule; Berufslehre gilt NICHT als
+   Studium). Bei Grenzfällen (z. B. Lehrer via PH) bitte bei Bedarf
+   anpassen.
+------------------------------------------------------------------ */
+const PROFESSION_STUDY_FACTS = {
+  "Lehrer": true,
+  "Arzt": true,
+  "Feuerwehrmann": false,
+  "Polizist": false,
+  "Koch": false,
+  "Bäcker": false,
+  "Pilot": false,
+  "Sänger": false,
+  "Bauer": false,
+  "Zahnarzt": true,
+  "Astronaut": true,
+  "Frisör": false,
+  "Elektriker": false,
+  "Gärtner": false,
+  "Tierarzt": true,
+  "Anwalt": true
+};
+
+function findProfessionStudyHint(question, topic) {
+  if (topic !== "Berufe") return null;
+  if (!/studier|studium/i.test(question)) return null;
+  const braucht = Object.keys(PROFESSION_STUDY_FACTS).filter(k => PROFESSION_STUDY_FACTS[k]);
+  const brauchtNicht = Object.keys(PROFESSION_STUDY_FACTS).filter(k => !PROFESSION_STUDY_FACTS[k]);
+  return `Fakten zum Studium (Schweizer Kontext, Berufslehre zählt NICHT als Studium): Studium nötig bei: ${braucht.join(", ")}. Kein Studium nötig (Berufslehre) bei: ${brauchtNicht.join(", ")}.`;
+}
+
+/* ---------- Faktentabelle: Fährt auf der Strasse? (nur Fahrzeuge) ----------
+   Bei nur 32 Fahrzeugen lässt sich auch diese Eigenschaft fest
+   hinterlegen. Vier Einträge sind Grenzfälle (Skateboard, Bagger,
+   Rollstuhl, Rennwagen) – bei Bedarf hier anpassen.
+------------------------------------------------------------------ */
+const VEHICLE_ROAD_FACTS = {
+  "Auto": true, "Fahrrad": true, "Motorrad": true, "Bus": true,
+  "Zug": false, "Flugzeug": false, "Schiff": false, "Boot": false,
+  "U-Boot": false, "Hubschrauber": false, "Traktor": true, "Lastwagen": true,
+  "Roller": true, "Skateboard": true, "Schlitten": false, "Kanu": false,
+  "Segelboot": false, "Heissluftballon": false, "Rakete": false, "Zeppelin": false,
+  "Bagger": true, "Trottinet": true, "Feuerwehrauto": true, "Krankenwagen": true,
+  "Polizeiauto": true, "Müllwagen": true, "Wohnmobil": true, "Seilbahn": false,
+  "Kutsche": true, "Rollstuhl": true, "Dreirad": true, "Rennwagen": false
+};
+
+function findVehicleRoadHint(question, topic) {
+  if (topic !== "Fahrzeuge") return null;
+  if (!/strasse|straße/i.test(question)) return null;
+  const ja = Object.keys(VEHICLE_ROAD_FACTS).filter(k => VEHICLE_ROAD_FACTS[k]);
+  const nein = Object.keys(VEHICLE_ROAD_FACTS).filter(k => !VEHICLE_ROAD_FACTS[k]);
+  return `Fakten dazu, was typischerweise auf der Strasse fährt: Ja bei: ${ja.join(", ")}. Nein bei (fährt/schwimmt/fliegt woanders): ${nein.join(", ")}.`;
+}
+
+/* ---------- Faktentabelle: Frucht oder Gemüse? (nur Lebensmittel) ----------
+   Botanisch sind Tomate, Gurke, Erbse, Kürbis etc. Früchte (entwickeln
+   sich aus dem Fruchtknoten), umgangssprachlich gelten sie aber klar
+   als Gemüse. Die KI hat diese beiden Definitionen bisher inkonsistent
+   vermischt (z. B. Erbse fälschlich als "Ja" auf BEIDE Fragen "Frucht?"
+   und "Gemüse?" eingestuft). Diese Tabelle erzwingt die alltägliche,
+   sich gegenseitig ausschliessende Einteilung für Kinder.
+------------------------------------------------------------------ */
+const FOOD_FRUIT_VEGETABLE = {
+  fruits: ["Apfel","Banane","Orange","Birne","Traube","Erdbeere","Himbeere","Kirsche","Pfirsich","Aprikose","Ananas","Mango","Kiwi","Zitrone","Melone","Pflaume","Heidelbeere","Brombeere","Granatapfel","Feige"],
+  vegetables: ["Karotte","Kartoffel","Tomate","Gurke","Paprika","Zwiebel","Knoblauch","Broccoli","Blumenkohl","Kohl","Spinat","Salat","Erbse","Bohne","Mais","Kürbis","Rettich","Sellerie","Lauch","Aubergine"]
+};
+
+function findFoodCategoryHint(question, topic) {
+  if (topic !== "Lebensmittel") return null;
+  if (!/frucht|früchte|obst|gemüse|gemuese/i.test(question)) return null;
+  return `Fakten zu Frucht/Gemüse: Verwende die ALLTAGSSPRACHLICHE Einteilung für Kinder, NICHT die botanische Definition (botanisch wären Tomate, Gurke, Erbse etc. auch "Früchte", weil sie sich aus dem Fruchtknoten entwickeln – umgangssprachlich gelten sie aber eindeutig als Gemüse). Frucht/Obst sind: ${FOOD_FRUIT_VEGETABLE.fruits.join(", ")}. Gemüse sind: ${FOOD_FRUIT_VEGETABLE.vegetables.join(", ")}. Alle anderen Lebensmittel aus der Liste (z. B. Brot, Fleisch, Milchprodukte, Süssigkeiten, Getränke, Gewürze, Fertiggerichte) sind WEDER Frucht NOCH Gemüse. Frucht und Gemüse schliessen sich gegenseitig aus – ein Ding kann nicht auf beide Fragen "Ja" sein.`;
+}
+
+/* ---------- Generelle Vergleichsform-Erkennung ----------
+   Erkennt die deutsche Komparativ-Konstruktion "...er als ein/eine
+   X" (z. B. "gesünder als ein Schokoriegel", "grösser als ein Hund",
+   "teurer als ein Motorrad") UNABHÄNGIG vom konkreten Adjektiv, UND
+   die Gleichheitsform "so/genauso/gleich X wie Y" (z. B. "genauso
+   gross wie ein Hund", "doppelt so teuer wie ein Buch"). Läuft rein
+   regelbasiert (kein API-Aufruf, kein Sprachmodell-Risiko) und
+   verhindert zuverlässig, dass die Vage-Erkennung bei JEDEM neuen
+   Adjektiv erneut anschlägt, obwohl bereits mit einem konkreten
+   Objekt verglichen wird.
+   WICHTIG: Nutzt eine eigene Zeichenklasse statt \w, weil \w in
+   JavaScript deutsche Umlaute (ä/ö/ü) NICHT erfasst – sonst würde
+   z. B. "gefährlicher" an der Stelle des "ä" reissen.
+------------------------------------------------------------------ */
+function isComparativeWithObject(question) {
+  const W = "[a-zA-ZäöüÄÖÜß]+"; // eigene "Wort"-Definition inkl. Umlaute
+  const alsPattern = new RegExp(`\\b(${W}er|mehr|weniger)\\b\\s+als\\s+(ein|eine|einen|einem|der|die|das)?\\s*${W}`, "i");
+  const wiePattern = new RegExp(`\\b(genauso|ebenso|gleich|doppelt so|halb so|so)\\s+${W}\\s+wie\\s+(ein|eine|einen|einem|der|die|das)?\\s*${W}`, "i");
+  // VERSION 60: auch Vergleiche mit einer Zahl/Masseinheit gelten als klar
+  // (z. B. "Ist es schwerer als 60kg?", "Ist es länger als 2 Meter?")
+  const numberPattern = new RegExp(`\\b(${W}er|mehr|weniger)\\b\\s+als\\s+\\d`, "i");
+  return alsPattern.test(question) || wiePattern.test(question) || numberPattern.test(question);
+}
+
+/* ---------- Zusatzhinweis bei Umformulierungs-Rückfragen ----------
+   Wird IMMER angehängt, wenn der Chatbot eine Frage nicht versteht
+   (unabhängig davon, ob ein Fragezeichen vorhanden ist).
+------------------------------------------------------------------ */
+function questionMarkHint(question) {
+  return " Vergiss nicht das Fragezeichen und schreib in der dritten Person (es).";
+}
+
+/* ---------- Faktenregel: Herkunft/Lebensraum von Tieren (nur Tiere) ----------
+   Fragen wie "Kommt es aus Amerika?" oder "Lebt es in Afrika?" hat die
+   KI teils falsch beantwortet, weil Tiere wie das Känguru auch in Zoos
+   auf anderen Kontinenten leben. Diese Regel legt fest: Es zählt das
+   NATÜRLICHE, wilde Verbreitungsgebiet – Zoos und Tierparks zählen nie.
+   Wird nur eingespeist, wenn die Frage nach Kontinent/Herkunft fragt.
+------------------------------------------------------------------ */
+function findAnimalOriginHint(question, topic) {
+  if (topic !== "Tiere") return null;
+  if (!/amerika|afrika|asien|europa|australien|antarktis|arktis|kontinent|herkunft|kommt\s+(es|er|sie)?\s*aus|stammt|heimat|zoo|tierpark|land|dschungel|wüste|wueste/i.test(question)) return null;
+  return `Regel zur Herkunft/zum Lebensraum von Tieren: Es zählt AUSSCHLIESSLICH das natürliche, wilde Verbreitungsgebiet des Tieres. Zoos, Tierparks, Zirkusse oder einzelne ausgesetzte Tiere zählen NIE – nur weil ein Tier in einem Zoo in Amerika oder Europa lebt, kommt es NICHT von dort. Wichtige feste Fakten: Das Känguru kommt NUR aus Australien (inkl. Neuguinea), NICHT aus Amerika, Afrika, Asien oder Europa. Der Koala kommt NUR aus Australien. Haus- und Nutztiere, die heute überall beim Menschen leben (Hund, Katze, Kuh, Pferd, Schwein, Schaf, Ziege, Esel, Huhn), gelten als auf allen bewohnten Kontinenten lebend.`;
+}
+
+/* =====================================================================
+   VERSION 57 – Verbesserungen aufgrund der Klassendaten vom 21.10.2026
+   ===================================================================== */
+
+/* ---------- (4) du-Form & fehlendes Fragezeichen intern ausgleichen ----------
+   Kinder schreiben oft "Bist du ein Arzt" oder "Arbeitest du draussen".
+   Für die KI wird die Frage intern in die es-Form gebracht und bei
+   Bedarf ein Fragezeichen ergänzt. Im Chat und im Export bleibt die
+   ORIGINALE Frage des Kindes stehen.
+------------------------------------------------------------------ */
+const DU_VERB_EXCEPTIONS = {
+  "bist": "ist", "hast": "hat", "kannst": "kann", "willst": "will", "musst": "muss",
+  "darfst": "darf", "sollst": "soll", "magst": "mag", "weisst": "weiss", "weißt": "weiß",
+  "isst": "isst", "frisst": "frisst", "liest": "liest", "heisst": "heisst", "heißt": "heißt",
+  "wirst": "wird", "trittst": "tritt", "hältst": "hält", "läufst": "läuft"
+};
+function normalizeQuestionForAI(question) {
+  let q = question.trim();
+  // "<Verb>st du" -> "<Verb>t es"
+  q = q.replace(/\b([A-Za-zÄÖÜäöüß]+)\s+du\b/gi, (match, verb) => {
+    const lower = verb.toLowerCase();
+    let newVerb = null;
+    if (DU_VERB_EXCEPTIONS[lower]) newVerb = DU_VERB_EXCEPTIONS[lower];
+    else if (/est$/.test(lower) && lower.length > 4) newVerb = lower.slice(0, -3) + "et"; // arbeitest -> arbeitet
+    else if (/st$/.test(lower) && lower.length > 3) newVerb = lower.slice(0, -2) + "t";   // machst -> macht
+    else if (/tes$/.test(lower) && lower.length > 5) newVerb = lower.slice(0, -2) + "et"; // Tippfehler "Arbeites" -> "Arbeitet"
+    if (!newVerb) return match;
+    if (verb[0] === verb[0].toUpperCase()) newVerb = newVerb[0].toUpperCase() + newVerb.slice(1);
+    return newVerb + " es";
+  });
+  // "du" an anderer Stelle (z. B. "Kannst du..." schon ersetzt; "Machst du etwas mit...")
+  q = q.replace(/\bdu\b/gi, "es");
+  // Possessiv "dein/deinem/..." -> "dieser Beruf/dieses Ding"
+  q = q.replace(/\bdeinem\b/gi, "diesem").replace(/\bdeiner\b/gi, "dieser")
+       .replace(/\bdeinen\b/gi, "diesen").replace(/\bdeine\b/gi, "diese")
+       .replace(/\bdein\b/gi, "der").replace(/\bdei\b/gi, "der");
+  // Fragezeichen ergänzen (bzw. Tippfehler wie ' oder $ am Ende ersetzen)
+  q = q.replace(/[\s'´`$.!,;:]+$/, "");
+  if (!q.endsWith("?")) q += "?";
+  return q;
+}
+
+/* ---------- Textvergleich (für Treffer- und Wiederholungserkennung) ---------- */
+function normalizeWord(w) {
+  return w.toLowerCase()
+    .replace(/ß/g, "ss").replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u")
+    .replace(/[éèê]/g, "e").replace(/[àâ]/g, "a")
+    .replace(/[^a-z]/g, "")
+    .replace(/tz/g, "z")      // "Artzt" -> "Arzt"
+    .replace(/h(?=[^aeiou]|$)/g, "") // stummes h: "Dreirahd" -> "Dreirad", "Fahrrad" -> "Farrad"
+    .replace(/(.)\1+/g, "$1"); // Doppelbuchstaben: "Harre" -> "Hare", "Fahrad"/"Fahrrad"
+}
+function editDistance(a, b) {
+  if (a === b) return 0;
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1, dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return dp[a.length][b.length];
+}
+function wordsSimilar(word, name) {
+  if (!word || !name) return false;
+  if (word === name) return true;
+  const maxDist = name.length <= 4 ? 0 : (name.length <= 7 ? 1 : 2);
+  if (editDistance(word, name) <= maxDist) return true;
+  // weibliche Form: "Lehrerin" = "Lehrer", "Ärztin" = "Arzt", "Polizistin" = "Polizist"
+  if (word.endsWith("in") && word.length > 4) {
+    const stem = word.slice(0, -2);
+    if (stem === name || (name.length > 4 && editDistance(stem, name) <= 1)) return true;
+  }
+  return false;
+}
+
+// Synonyme / Kinderformulierungen -> Eintrag in der Kandidatenliste
+const NAME_SYNONYMS = {
+  "lehrperson": "Lehrer", "lerperson": "Lehrer", "lehrerin": "Lehrer",
+  "feuerwehrfrau": "Feuerwehrmann", "feuerwehr": "Feuerwehrmann",
+  "friseur": "Frisör", "coiffeur": "Frisör", "coiffeuse": "Frisör", "friseurin": "Frisör", "coifeur": "Frisör",
+  "bauerin": "Bauer", "landwirt": "Bauer",
+  "velo": "Fahrrad", "tof": "Motorrad", "toff": "Motorrad", "trotti": "Trottinet", "trotinett": "Trottinet",
+  "helikopter": "Hubschrauber", "laster": "Lastwagen", "lkw": "Lastwagen",
+  "tintenfisch": "Krake", "oktopus": "Krake"
+};
+
+/* ---------- (1) Direkte Vermutung lokal erkennen ----------
+   Prüft OHNE KI, ob die Frage eine direkte Vermutung ist ("Ist es ein
+   Zahnarzt?", "Bist du anwalt", "Ist die arbeit lehrer", "Krake?")
+   und welcher Kandidat aus dem Thema gemeint ist. Tippfehler, Gross-/
+   Kleinschreibung, du-Form, weibliche Formen und fehlende Fragezeichen
+   werden toleriert.
+   Gibt den Kandidatennamen zurück oder null.
+------------------------------------------------------------------ */
+const GUESS_START_VERBS = ["ist", "bist", "isch", "sind", "wars", "war", "es"];
+const GUESS_FILLERS = ["es", "du", "er", "sie", "das", "der", "die", "den", "ein", "eine", "einen", "einem", "einer",
+  "dein", "dei", "deine", "deinem", "dieser", "dieses", "diese", "dises", "dise", "gesuchte", "gesuchtes",
+  "beruf", "arbeit", "job", "tier", "fahrzeug", "ding", "sache", "gegenstand", "essen", "lebensmittel",
+  "vieleicht", "vielleicht", "also", "denn", "etwa", "wohl", "dan", "dann", "jetzt", "art", "von", "so"];
+function findGuessedCandidate(question, topic) {
+  const list = TOPICS[topic] || [];
+  const rawWords = question.split(/[\s\-\/]+/).map(normalizeWord).filter(Boolean);
+  if (rawWords.length === 0 || rawWords.length > 8) return null;
+
+  let words = rawWords;
+  if (words.length > 1) {
+    // Muss wie eine Vermutung beginnen ("Ist ...", "Bist ...")
+    if (!GUESS_START_VERBS.map(normalizeWord).includes(words[0])) return null;
+    words = words.slice(1);
+  }
+  // Füllwörter vorne entfernen; übrig bleiben darf NUR der Name (1–2 Wörter)
+  const fillers = GUESS_FILLERS.map(normalizeWord);
+  while (words.length > 0 && fillers.includes(words[0])) words = words.slice(1);
+  if (words.length === 0 || words.length > 2) return null;
+
+  return matchName(words.join(""), list);
+}
+function matchName(word, list) {
+  if (NAME_SYNONYMS[word] && list.includes(NAME_SYNONYMS[word])) return NAME_SYNONYMS[word];
+  // exakter Treffer zuerst (damit "Arzt" nicht als "Zahnarzt" erkannt wird o. ä.)
+  for (const c of list) if (normalizeWord(c) === word) return c;
+  let best = null, bestDist = Infinity;
+  for (const c of list) {
+    const n = normalizeWord(c);
+    if (wordsSimilar(word, n)) {
+      const d = editDistance(word, n);
+      if (d < bestDist) { best = c; bestDist = d; }
+    }
+  }
+  return best;
+}
+
+/* ---------- Unvollständige Frage ("Ist es", "Bist du") ---------- */
+function isIncompleteQuestion(question) {
+  const words = question.split(/\s+/).map(normalizeWord).filter(Boolean);
+  const filler = ["ist", "bist", "hat", "hast", "kann", "kannst", "es", "du", "das", "der", "die", "ein", "eine", "isch"];
+  return words.length > 0 && words.length <= 3 && words.every(w => filler.includes(w));
+}
+
+/* ---------- (2) Wiederholte Fragen erkennen ----------
+   Speichert pro Runde die bereits gestellten Fragen (in einer
+   vereinheitlichten Form, unabhängig von du/es-Form, Gross-/Klein-
+   schreibung, Tippfehlern und Fragezeichen). Bei einer Wiederholung
+   gibt der Chatbot dieselbe Antwort wie beim ersten Mal und streicht
+   KEINE weiteren Kandidaten – vorher hat die KI manchmal anders
+   entschieden und bei derselben Frage nochmals Kandidaten gestrichen.
+------------------------------------------------------------------ */
+let askedQuestions = {}; // { schlüssel: { nr, answer } }
+function questionKey(question) {
+  return normalizeQuestionForAI(question).split(/\s+/)
+    .map(normalizeWord)
+    .filter(w => w && !["es", "man", "der", "die", "das", "ein", "eine", "einem", "einer", "in", "im", "bei", "diesem", "dieser", "dieses", "beruf", "etwas", "tier", "fahrzeug", "ding"].includes(w))
+    .map(w => w.replace(/n$/, ""))   // "Kinder"/"Kindern", "Tiere"/"Tieren"
+    .join(" ");
+}
+
+/* ---------- Faktenregel: feste Merkmale der Berufe ----------
+   Die häufigsten Kinderfragen im Thema Berufe wurden von der KI nicht
+   immer gleich beantwortet (z. B. "Arbeitet man draussen?" strich
+   mal 3, mal 9 Berufe). Diese Tabelle legt die Antworten fest.
+   >>> BITTE FACHLICH PRÜFEN und bei Bedarf anpassen: <<<
+   Für jedes Merkmal stehen die Berufe, bei denen die Antwort JA ist;
+   für alle anderen Berufe ist die Antwort NEIN.
+------------------------------------------------------------------ */
+const PROFESSION_FEATURES = [
+  { pattern: /draussen|draußen|drausen|im freien|aussen|ausserhalb/i, label: "hauptsächlich draussen arbeiten",
+    yes: ["Feuerwehrmann", "Polizist", "Bauer", "Gärtner"] },
+  { pattern: /drinnen|in einem geb[äa]ude|im geb[äa]ude|gebeude|im haus/i, label: "hauptsächlich drinnen (in einem Gebäude) arbeiten",
+    yes: ["Lehrer", "Arzt", "Koch", "Bäcker", "Zahnarzt", "Frisör", "Tierarzt", "Anwalt", "Elektriker", "Sänger"] },
+  { pattern: /b[üu]ro/i, label: "hauptsächlich im Büro arbeiten",
+    yes: ["Anwalt"] },
+  { pattern: /kind/i, label: "hauptsächlich mit Kindern arbeiten",
+    yes: ["Lehrer"] },
+  { pattern: /tier/i, label: "mit Tieren arbeiten",
+    yes: ["Bauer", "Tierarzt"] },
+  { pattern: /leben|rettet|retten/i, label: "Leben retten (von Menschen oder Tieren)",
+    yes: ["Arzt", "Feuerwehrmann", "Polizist", "Tierarzt"] },
+  { pattern: /feuer|brand|l[öo]sch/i, label: "Feuer bekämpfen/löschen",
+    yes: ["Feuerwehrmann"] },
+  { pattern: /waffe|pistole/i, label: "eine Waffe tragen",
+    yes: ["Polizist"] },
+  { pattern: /koch|k[üu]che/i, label: "kochen / in der Küche arbeiten",
+    yes: ["Koch"] },
+  { pattern: /back/i, label: "backen",
+    yes: ["Bäcker"] },
+  { pattern: /essen|lebensmittel|nahrung/i, label: "mit Essen/Lebensmitteln arbeiten",
+    yes: ["Koch", "Bäcker", "Bauer"] },
+  { pattern: /fahrzeug|auto|fährt|f[äa]hrt|fahren|traktor/i, label: "bei der Arbeit ein Fahrzeug benutzen/fahren",
+    yes: ["Pilot", "Feuerwehrmann", "Polizist", "Bauer", "Astronaut"] },
+  { pattern: /luft|fliegt|fliegen|flugzeug/i, label: "in der Luft / beim Fliegen arbeiten",
+    yes: ["Pilot", "Astronaut"] },
+  { pattern: /garten|pflanze|blume/i, label: "mit Pflanzen / im Garten arbeiten",
+    yes: ["Gärtner", "Bauer"] },
+  { pattern: /gericht/i, label: "am Gericht arbeiten",
+    yes: ["Anwalt"] },
+  { pattern: /klinik|spital|krankenhaus|praxis/i, label: "in einer Klinik / einem Spital / einer Praxis arbeiten",
+    yes: ["Arzt", "Zahnarzt", "Tierarzt"] },
+  { pattern: /b[üu]hne|singt|singen|musik/i, label: "auf der Bühne / mit Musik arbeiten",
+    yes: ["Sänger"] },
+  { pattern: /haar|hare/i, label: "Haare schneiden / mit Haaren arbeiten",
+    yes: ["Frisör"] },
+  { pattern: /z[äa]hne|zahn/i, label: "mit Zähnen arbeiten",
+    yes: ["Zahnarzt"] },
+  { pattern: /strom|kabel|elektr/i, label: "mit Strom arbeiten",
+    yes: ["Elektriker"] },
+  { pattern: /weltall|weltraum|rakete/i, label: "im Weltall arbeiten",
+    yes: ["Astronaut"] }
+];
+function findProfessionFeatureHint(question, topic) {
+  if (topic !== "Berufe") return null;
+  // Direkte Vermutungen ("Ist es ein Zahnarzt?") brauchen keine Merkmalsregel
+  if (findGuessedCandidate(question, topic)) return null;
+  const matches = PROFESSION_FEATURES.filter(f => f.pattern.test(question));
+  if (matches.length === 0) return null;
+  const lines = matches.map(f => `- Merkmal "${f.label}": JA nur bei ${f.yes.join(", ")}; bei ALLEN anderen Berufen NEIN.`);
+  return `Feste Faktenregeln für dieses Spiel (diese gelten VERBINDLICH und gehen deinem eigenen Wissen vor, sofern die Frage dieses Merkmal meint):\n${lines.join("\n")}`;
+}
+
+/* =====================================================================
+   VERSION 60 – Verbesserungen aufgrund der Klassendaten vom 28.10.2026
+   ===================================================================== */
+
+/* ---------- (A) Buchstaben-Fragen OHNE KI beantworten ----------
+   Die KI liest Wörter nicht Buchstabe für Buchstabe, sondern in
+   Wortstücken. Am 28.10. waren darum 3 von 6 Buchstaben-Fragen falsch
+   (z. B. "Ist im Namen ein O?" bei «Teller» -> Ja). Solche Fragen
+   werden jetzt direkt im Programm anhand der Schreibweise geprüft –
+   für ALLE Kandidaten, die Antwort ist damit immer richtig.
+   Erkannt werden z. B.:
+     "Ist im Namen ein E?", "Hat es ein E im Namen?", "Kommt ein A im Wort vor?"
+     "Beginnt es mit B?", "Fängt der Name mit K an?", "Endet es mit R?"
+     "Hat der Name mehr als 5 Buchstaben?", "Hat das Wort 4 Buchstaben?"
+     "Ein A?" / "Und ein U?" direkt nach einer Buchstaben-Frage
+     "Ist kein E im Namen?" (Verneinung wird berücksichtigt)
+   UMLAUT_COUNTS_AS_BASE = true: Bei der Frage nach "A" zählt auch "Ä"
+   (Bäcker hat ein A). Wird ausdrücklich nach "Ä" gefragt, zählt nur "Ä".
+   Auf false setzen, wenn Ä/Ö/Ü als eigene Buchstaben gelten sollen.
+------------------------------------------------------------------ */
+const UMLAUT_COUNTS_AS_BASE = true;
+let lastWasLetterQuestion = false;
+
+function nameLetters(name) {
+  return name.toLowerCase().replace(/[^a-zäöüß]/g, "");
+}
+function letterMatches(ch, letter) {
+  if (ch === letter) return true;
+  if (UMLAUT_COUNTS_AS_BASE) {
+    if (letter === "a" && ch === "ä") return true;
+    if (letter === "o" && ch === "ö") return true;
+    if (letter === "u" && ch === "ü") return true;
+    if (letter === "s" && ch === "ß") return true;
+  }
+  return false;
+}
+function letterRuleAnswer(question, candidateList, prevWasLetter) {
+  const text = question.toLowerCase().replace(/[„“"«»'´`‘’?!.,;:()\-]/g, " ").replace(/\s+/g, " ").trim();
+  const tokens = text.split(" ").filter(Boolean);
+  const singles = tokens.filter(t => /^[a-zäöü]$/.test(t));
+  const mentionsName = /\b(namen?|nahmen?|wort|wortes|buchstaben?|buchstabe)\b/.test(text);
+  const negated = /\b(kein|keinen|keine|nicht)\b/.test(text);
+
+  // Länge: "mehr als 5 Buchstaben", "weniger als 6 Buchstaben", "5 Buchstaben"
+  const lenCmp = /\b(mehr|weniger) als (\d+) buchstaben?\b/.exec(text);
+  const lenEq = /\b(\d+) buchstaben?\b/.exec(text);
+  if (lenCmp || lenEq) {
+    let test;
+    if (lenCmp) {
+      const n = parseInt(lenCmp[2], 10);
+      test = lenCmp[1] === "mehr" ? (c => nameLetters(c).length > n) : (c => nameLetters(c).length < n);
+    } else {
+      const n = parseInt(lenEq[1], 10);
+      test = c => nameLetters(c).length === n;
+    }
+    const yes = candidateList.filter(c => test(c) !== negated);
+    return { yes, no: candidateList.filter(c => !yes.includes(c)), label: "Buchstabenregel (Länge)" };
+  }
+
+  if (singles.length !== 1) return null;
+  const letter = singles[0];
+
+  const beginsVerb = /\b(beginnt|beginnst|fängt|faengt|fängst|startet|anfangsbuchstabe|anfang|erster|erste|ersten)\b/.test(text);
+  const endsVerb = /\b(endet|endest|hört|hoert|hörst|aufhört|letzter|letzte|letzten|ende|endbuchstabe|schluss)\b/.test(text);
+  const shortElliptical = prevWasLetter && tokens.length <= 3 &&
+    tokens.every(t => ["und", "ein", "einen", "eine", "auch", "es", "hat", "mit", letter].includes(t));
+
+  if (!(mentionsName || beginsVerb || endsVerb || shortElliptical)) return null;
+
+  let test, label;
+  if (beginsVerb) {
+    test = c => { const n = nameLetters(c); return n.length > 0 && letterMatches(n[0], letter); };
+    label = "Buchstabenregel (Anfang)";
+  } else if (endsVerb) {
+    test = c => { const n = nameLetters(c); return n.length > 0 && letterMatches(n[n.length - 1], letter); };
+    label = "Buchstabenregel (Ende)";
+  } else {
+    test = c => [...nameLetters(c)].some(ch => letterMatches(ch, letter));
+    label = "Buchstabenregel (enthält)";
+  }
+  const yes = candidateList.filter(c => test(c) !== negated);
+  return { yes, no: candidateList.filter(c => !yes.includes(c)), label };
+}
+
+/* ---------- (B) Feste Tier-Fakten: Beine, Flossen, Meer ----------
+   Am 28.10. wurde z. B. "Hat es Beine?" beim Wal mit Ja beantwortet,
+   bei der Robbe "Beine: Ja" und gleichzeitig "vier Beine: Nein".
+   Ausserdem blieben bei "Lebst du im Meer?" Bär, Waschbär und Tiger
+   übrig (die KI denkt an Eisbär, an Tiger, die an Küsten schwimmen,
+   und an das Wort "Bär" in "Waschbär").
+   Festgelegt (Alltagssprache der Kinder):
+   - Flossen zählen NICHT als Beine.
+   - Affen und Kängurus haben 2 Beine (und 2 Arme).
+   - "Im Meer" leben nur Tiere, deren Lebensraum das Meer ist.
+   >>> BITTE FACHLICH PRÜFEN und bei Bedarf anpassen. <<<
+   Einfache Fragen wie "Hat es Beine?", "Hat es vier Beine?", "Hat es
+   Flossen?", "Lebt es im Meer?" (auch du-Form, "dieses Tier") werden
+   direkt aus dieser Tabelle beantwortet. Kompliziertere Fragen
+   ("Hat es lange Beine?", "Lebt es nicht im Meer?") gehen weiter an
+   die KI, die diese Tabelle als verbindliche Regel mitbekommt.
+------------------------------------------------------------------ */
+const ANIMAL_LEGS = {
+  0: ["Hai", "Schlange", "Krake", "Delfin", "Wal", "Robbe"],
+  2: ["Adler", "Pinguin", "Huhn", "Papagei", "Eule", "Storch", "Schwan", "Affe", "Gorilla", "Schimpanse", "Känguru"],
+  6: ["Biene", "Schmetterling"],
+  8: ["Spinne", "Skorpion"]
+  // alle übrigen Tiere der Liste: 4 Beine
+};
+const ANIMAL_FINS = ["Hai", "Delfin", "Wal", "Robbe"];
+const ANIMAL_SEA = ["Hai", "Krake", "Delfin", "Wal", "Robbe", "Pinguin"];
+
+function legCount(animal) {
+  for (const n of [0, 2, 6, 8]) if (ANIMAL_LEGS[n].includes(animal)) return n;
+  return 4;
+}
+const NUMBER_WORDS = { "zwei": 2, "2": 2, "vier": 4, "4": 4, "sechs": 6, "6": 6, "acht": 8, "8": 8 };
+
+function animalRuleAnswer(question, topic, candidateList) {
+  if (topic !== "Tiere") return null;
+  let s = question.toLowerCase().replace(/[^a-zäöüß0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  s = s.replace(/\b(das|dieses|dises|dein|deine|dieser|diese|dise|dies) tier\b/g, "es")
+       .replace(/\b(du|man|er|sie)\b/g, "es")
+       .replace(/\bhet\b/g, "hat").replace(/\bhast\b/g, "hat")
+       .replace(/\b(lebst|wohnst|wohnt|schwimmst)\b/g, "lebt").replace(/\bschwimmt\b/g, "lebt");
+  // Verneinungen, Verknüpfungen und genauere Beschreibungen -> lieber die KI fragen
+  if (/\b(nicht|kein|keine|keinen|und|oder|nur|lange|kurze|starke|grosse|kleine|dünne|dicke|bunte)\b/.test(s)) return null;
+
+  const pick = test => {
+    const yes = candidateList.filter(test);
+    return { yes, no: candidateList.filter(c => !yes.includes(c)) };
+  };
+  let m;
+  if ((m = /^(?:hat|besitzt) es (?:(zwei|2|vier|4|sechs|6|acht|8) )?beine$/.exec(s))) {
+    if (m[1]) { const n = NUMBER_WORDS[m[1]]; return { ...pick(c => legCount(c) === n), label: "Tierregel (Anzahl Beine)" }; }
+    return { ...pick(c => legCount(c) > 0), label: "Tierregel (Beine)" };
+  }
+  if ((m = /^(?:hat|besitzt) es (mehr|weniger) als (zwei|2|vier|4|sechs|6|acht|8) beine$/.exec(s))) {
+    const n = NUMBER_WORDS[m[2]];
+    return { ...pick(c => m[1] === "mehr" ? legCount(c) > n : legCount(c) < n), label: "Tierregel (Anzahl Beine)" };
+  }
+  if (/^(?:hat|besitzt) es flossen$/.test(s)) {
+    return { ...pick(c => ANIMAL_FINS.includes(c)), label: "Tierregel (Flossen)" };
+  }
+  if (/^(?:lebt|ist) es (?:im|in dem|in einem|in|am) (?:meer|ozean)$/.test(s)) {
+    return { ...pick(c => ANIMAL_SEA.includes(c)), label: "Tierregel (Meer)" };
+  }
+  return null;
+}
+
+// Für kompliziertere Fragen: dieselben Fakten als verbindliche Regel für die KI
+function findAnimalFeatureHint(question, topic) {
+  if (topic !== "Tiere") return null;
+  const parts = [];
+  if (/bein|flosse/i.test(question)) {
+    parts.push(`Beine: Flossen zählen NICHT als Beine. KEINE Beine haben: ${ANIMAL_LEGS[0].join(", ")}. ZWEI Beine haben: ${ANIMAL_LEGS[2].join(", ")} (Affen und Kängurus: 2 Beine und 2 Arme). SECHS Beine: ${ANIMAL_LEGS[6].join(", ")}. ACHT Beine: ${ANIMAL_LEGS[8].join(", ")}. Alle anderen Tiere haben VIER Beine. Flossen haben: ${ANIMAL_FINS.join(", ")}.`);
+  }
+  if (/meer|ozean|salzwasser/i.test(question)) {
+    parts.push(`Meer: Im Meer leben NUR ${ANIMAL_SEA.join(", ")}. Alle anderen Tiere leben NICHT im Meer – auch nicht Bär (gemeint ist kein Eisbär), Waschbär, Tiger, Krokodil, Otter, Schildkröte oder Frosch.`);
+  }
+  if (parts.length === 0) return null;
+  return `Feste Faktenregeln für dieses Spiel (VERBINDLICH, gehen deinem eigenen Wissen vor):\n- ${parts.join("\n- ")}`;
+}
+
+/* ---------- (C) Gültige Fragen nicht als "unverständlich" ablehnen ----------
+   Am 28.10. lehnte die KI 21 Fragen als "kein verständlicher Satz" ab,
+   darunter viele gute ("Fliegt es?", "Ist es heiss?", "Arbeitet es in
+   garten?"). Beginnt eine Eingabe mit einem typischen Fragewort-Verb und
+   hat sie mindestens zwei Wörter, gilt sie jetzt immer als verständlich.
+------------------------------------------------------------------ */
+const QUESTION_START_VERBS = ["ist", "isch", "bist", "hat", "hast", "het", "kann", "kannst", "wird", "lebt", "lebst",
+  "arbeitet", "arbeitest", "macht", "machst", "braucht", "brauchst", "gibt", "fahrt", "fahrst", "fliegt", "fliegst",
+  "frisst", "isst", "tut", "tust", "muss", "musst", "darf", "sind", "war", "liebt", "backt", "baut", "hilft", "benutzt",
+  "schwimmt", "kocht", "singt", "schneidet", "rettet", "lernt", "wohnt", "tragt", "spielt", "gehort", "besteht",
+  "passt", "steht", "liegt", "riecht", "schmeckt", "legt", "frist", "esst"];
+function looksLikeRealQuestion(question) {
+  const words = question.trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return false;
+  const letters = (question.match(/[a-zA-ZäöüÄÖÜß]/g) || []).length;
+  const nonSpace = question.replace(/\s/g, "").length;
+  if (nonSpace === 0 || letters / nonSpace < 0.7) return false;
+  return QUESTION_START_VERBS.map(normalizeWord).includes(normalizeWord(words[0]));
+}
+
+/* ---------- Schwierigkeitsgrad-Anzeige ---------- */
+function updateDifficultyLabel() {
+  const idx = parseInt(document.getElementById("difficultySlider").value, 10);
+  const d = DIFFICULTIES[idx];
+  document.getElementById("difficultyLabel").textContent = `${d.icon} ${d.label} (${d.topic})`;
+  document.getElementById("difficultyHint").textContent =
+    `Feste Liste mit ${TOPICS[d.topic].length} Basis-Level-Objekten.`;
+}
+updateDifficultyLabel();
+
+/* ---------- Spielzustand ---------- */
+let candidates = [];      // aktuell verbleibende Kandidaten (Ωt)
+let secret = "";          // vom Chatbot gewähltes Ziel-Objekt
+let questionNumber = 0;
+let topicName = "";       // aktuelles Thema, für semantische Fragetyp-Klassifikation
+let listViewed = false;   // ob die Kandidatenliste mindestens einmal geöffnet wurde
+let listViewedAtQuestion = null; // nach welcher Fragenummer die Liste geöffnet wurde (null = nie)
+let currentRound = 1;     // 1 = ohne Hilfe, 2 = mit sokratischem Coaching
+let lastDifficultyIndex = 0; // Schwierigkeitsgrad aus Runde 1, für Runde 2 beibehalten
+let coachingLog = [];     // Protokoll der Coaching-Eingriffe in Runde 2
+let interventionAttempts = 0; // aufeinanderfolgende Eingriffe für die aktuelle Frage-Slot
+let awaitingNewQuestion = false; // true nach einem "Denkanstoss" (kein direkter Antwort erwartet)
+let originalCandidateCount = 0;  // Suchraumgrösse zu Rundenbeginn, für den Fortschrittsbalken
+let lastClassification = null;   // { question, yes, no } der letzten Frage, für Debug-Anzeige
+let questionClassifications = {}; // { fragenummer: {question, yes, no} } – für ALLE Fragen der Runde, auch nach Rundenende abrufbar
+let allRoundsData = { 2: null }; // "eingefrorene" Daten der Runde (Key 2 = einzige aktive Runde)
+let log = [];             // Protokoll für den CSV-Export
+let chatLog = [];         // VERSION 58: vollständiger Chatverlauf (für den Gesamt-Export)
+let apiKey = "";
+let childName = "";
+let roundActive = false;
+let sending = false;      // VERSION 60: true, solange eine Frage verarbeitet wird
+
+const chatDiv = document.getElementById("chat");
+const statusDiv = document.getElementById("status");
+
+function addMessage(role, text) {
+  const cls = role === "Kind" ? "msg-kind" : role === "20Q-Chatbot" ? "msg-coach" : "msg-system";
+  chatDiv.innerHTML += `<div class="${cls}"><b>${role}:</b> ${text}</div>`;
+  chatDiv.scrollTop = chatDiv.scrollHeight;
+  recordChat(role, text);
+}
+
+/* ---------- VERSION 58: Chatverlauf protokollieren ----------
+   Jede Nachricht (Kind, Chatbot, System) wird mit Uhrzeit gespeichert,
+   damit sie im Gesamt-Export erscheint. HTML (z. B. das 🔍-Symbol für
+   die Lehrperson) wird entfernt, nur der lesbare Text bleibt.
+   Gibt den Index des Eintrags zurück (für die Verknüpfung mit den
+   Ergebnissen der Frage).
+------------------------------------------------------------------ */
+function recordChat(role, html) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  const plain = (tmp.textContent || "").replace(/🔍/g, "").replace(/\s+/g, " ").trim();
+  const now = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  chatLog.push({
+    zeit: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+    rolle: role,
+    text: plain,
+    nr: null,        // Fragenummer, falls diese Kind-Nachricht als Frage gezählt wurde
+    coaching: ""     // Grund, falls der Coach eingegriffen hat
+  });
+  return chatLog.length - 1;
+}
+
+/* ---------- Runde starten ---------- */
+function startRound() {
+  apiKey = document.getElementById("apiKey").value.trim();
+  childName = document.getElementById("childName").value.trim().slice(0, 2);
+  const difficultyIndex = parseInt(document.getElementById("difficultySlider").value, 10);
+  const difficulty = DIFFICULTIES[difficultyIndex];
+  const topic = difficulty.topic;
+  topicName = topic;
+  lastDifficultyIndex = difficultyIndex;
+  currentRound = 2;
+
+  if (!apiKey) { alert("Bitte API-Key eingeben."); return; }
+  // VERSION 60: Kürzel ist Pflicht (am 28.10. spielten mehrere Kinder als "unbenannt")
+  if (!childName) { alert("Bitte gib zuerst dein Kürzel ein (z. B. LM)."); document.getElementById("childName").focus(); return; }
+  if (!isValidApiKeyFormat(apiKey)) {
+    alert("Der API-Key enthält ein ungültiges Zeichen (z. B. ein unsichtbares Sonderzeichen oder eine 'intelligente' Anführungszeichen-Variante). Bitte lösche das Feld und füge den Key nochmal ein, am besten direkt von platform.openai.com kopiert.");
+    return;
+  }
+
+  candidates = [...TOPICS[topic]];
+  originalCandidateCount = candidates.length;
+  lastClassification = null;
+  questionClassifications = {};
+  lastWasLetterQuestion = false; // VERSION 60
+  secret = candidates[Math.floor(Math.random() * candidates.length)];
+  questionNumber = 0;
+  listViewed = false;
+  listViewedAtQuestion = null;
+  log = [];
+  coachingLog = [];
+  chatLog = [];
+  askedQuestions = {};
+  interventionAttempts = 0;
+  awaitingNewQuestion = false;
+  roundActive = true;
+
+  chatDiv.innerHTML = "";
+  document.getElementById("setupBox").classList.add("hidden");
+  document.getElementById("gameBox").classList.remove("hidden");
+  document.getElementById("summary").style.display = "none";
+  document.getElementById("candidateList").style.display = "none";
+  document.getElementById("listToggleBtn").textContent = "📋 Liste anzeigen";
+  document.getElementById("listToggleBtn").classList.remove("hidden");
+  document.getElementById("listToggleBtn").disabled = false;
+
+  document.getElementById("appSubtitle").textContent = "20-Fragen-Spiel · Training mit Coaching";
+  addMessage("20Q-Chatbot", `Ich habe mir etwas aus «${difficulty.icon} ${topic}» überlegt (Schwierigkeitsgrad: ${difficulty.label}). Wenn etwas unklar ist, stelle ich eine Rückfrage. Stell mir Ja/Nein-Fragen, um herauszufinden, was es ist!`);
+  setAvatarMood("idle");
+  updateStatus();
+}
+
+function updateStatus() {
+  statusDiv.textContent = roundActive
+    ? `Frage ${questionNumber} · noch ${candidates.length} mögliche Dinge`
+    : "";
+  updateProgressBar();
+}
+
+/* ---------- Fortschrittsbalken ----------
+   Zeigt visuell, wie stark der Suchraum seit Rundenbeginn
+   geschrumpft ist (relativ zur Startgrösse).
+------------------------------------------------------------------ */
+function updateProgressBar() {
+  const bar = document.getElementById("progressBarInner");
+  if (!bar || originalCandidateCount === 0) return;
+  const remainingFraction = candidates.length / originalCandidateCount;
+  const progressPercent = Math.round((1 - remainingFraction) * 100);
+  bar.style.width = progressPercent + "%";
+}
+
+/* ---------- Bot-Avatar ----------
+   Einfacher Emoji-Ausdruck, der den Zustand des Bots visualisiert. ---------- */
+function setAvatarMood(mood) {
+  const avatar = document.getElementById("botAvatar");
+  if (!avatar) return;
+  const moods = {
+    idle: "🤖",
+    thinking: "🤔",
+    happy: "🙂",
+    coaching: "🧐",
+    celebrating: "🥳"
+  };
+  avatar.textContent = moods[mood] || moods.idle;
+  avatar.style.transform = (mood === "celebrating") ? "scale(1.3)" : "scale(1)";
+}
+
+/* ---------- Konfetti-Animation (nur bei Sieg) ---------- */
+function triggerConfetti() {
+  const colors = ["#e74c3c", "#f1c40f", "#2ecc71", "#3498db", "#9b59b6", "#e67e22"];
+  for (let i = 0; i < 60; i++) {
+    const piece = document.createElement("div");
+    piece.style.position = "fixed";
+    piece.style.top = "-10px";
+    piece.style.left = Math.random() * 100 + "vw";
+    piece.style.width = "8px";
+    piece.style.height = "14px";
+    piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+    piece.style.opacity = "0.9";
+    piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+    piece.style.zIndex = "9999";
+    piece.style.pointerEvents = "none";
+    piece.style.transition = `top ${1.5 + Math.random()}s linear, opacity 0.3s ease ${1.2 + Math.random()}s`;
+    document.body.appendChild(piece);
+    requestAnimationFrame(() => {
+      piece.style.top = "105vh";
+      piece.style.opacity = "0";
+    });
+    setTimeout(() => piece.remove(), 3000);
+  }
+}
+
+/* ---------- Soundeffekte (Web Audio API, keine externen Dateien) ---------- */
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+function playTone(freq, duration, type = "sine", delay = 0, volume = 0.15) {
+  try {
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.value = volume;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const startTime = ctx.currentTime + delay;
+    osc.start(startTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+    osc.stop(startTime + duration);
+  } catch (err) {
+    safeLog("Sound konnte nicht abgespielt werden:", err);
+  }
+}
+function playClickSound() { playTone(600, 0.06, "square", 0, 0.08); }
+function playAnswerSound(answer) {
+  if (answer === "Ja") { playTone(660, 0.12); playTone(880, 0.15, "sine", 0.1); }
+  else { playTone(330, 0.15); }
+}
+function playHintSound() { playTone(440, 0.1, "triangle"); playTone(392, 0.15, "triangle", 0.12); }
+function playWinSound() {
+  [523, 659, 784, 1047].forEach((freq, i) => playTone(freq, 0.2, "sine", i * 0.13, 0.12));
+}
+
+/* ---------- Kandidatenliste anzeigen/verstecken ----------
+   Zeigt die AKTUELL VERBLEIBENDEN Kandidaten (schrumpft live mit
+   jeder Antwort). Zählt mit, wie oft ein Kind die Liste öffnet –
+   nur beim Öffnen (nicht beim Schliessen), damit wiederholtes
+   Nachschauen sichtbar wird.
+------------------------------------------------------------------ */
+function toggleList() {
+  const panel = document.getElementById("candidateList");
+  const btn = document.getElementById("listToggleBtn");
+  const isHidden = panel.style.display === "none";
+
+  if (isHidden) {
+    listViewed = true;
+    if (listViewedAtQuestion === null) listViewedAtQuestion = questionNumber;
+    renderCandidateList();
+    panel.style.display = "block";
+    // Liste ist nur EINMAL ansehbar – Button wird nach dem ersten
+    // Öffnen gesperrt, kein erneutes Öffnen/Schliessen möglich.
+    btn.textContent = "📋 Liste angesehen";
+    btn.disabled = true;
+  } else {
+    panel.style.display = "none";
+    btn.textContent = "📋 Liste anzeigen";
+  }
+}
+
+function renderCandidateList() {
+  const panel = document.getElementById("candidateList");
+  panel.innerHTML = `<b>Noch möglich (${candidates.length}):</b> ${candidates.join(", ")}`;
+}
+
+/* ---------- Debug: KI-Klassifikation offenlegen ----------
+   Zeigt direkt im Chat, wie die KI die LETZTE Frage tatsächlich
+   beantwortet hat – welche Kandidaten sie in JA und welche in NEIN
+   eingeteilt hat. Nutzt die bereits berechnete Klassifikation
+   (kein zusätzlicher API-Aufruf, daher keine Gefahr einer
+   nachträglich erfundenen Erklärung).
+------------------------------------------------------------------ */
+function formatGroup(arr) {
+  if (arr.length === 0) return "(keine)";
+  if (arr.length <= 20) return arr.join(", ");
+  return arr.slice(0, 20).join(", ") + ` … und ${arr.length - 20} weitere`;
+}
+
+function explainLastClassification() {
+  if (!lastClassification) {
+    addMessage("System", "Noch keine Frage gestellt – es gibt noch nichts zu erklären.");
+    return;
+  }
+  const { question, yes, no } = lastClassification;
+  addMessage("System",
+    `🔍 Klassifikation zur Frage «${question}»:\n` +
+    `JA (${yes.length}): ${formatGroup(yes)}\n` +
+    `NEIN (${no.length}): ${formatGroup(no)}`
+  );
+}
+
+/* ---------- Klassifikation EINER bestimmten Frage anzeigen ----------
+   Wird durch Klick auf das 🔍-Icon neben einer einzelnen Bot-Antwort
+   ausgelöst (nur sichtbar für Lehrpersonen nach PIN-Eingabe). Nutzt
+   questionClassifications, das ALLE Fragen der Runde speichert – daher
+   funktioniert das auch für zurückliegende Fragen und sogar noch nach
+   Rundenende im Chatverlauf-Rückblick, nicht nur für die letzte Frage.
+------------------------------------------------------------------ */
+function showClassificationFor(nr) {
+  const data = questionClassifications[nr];
+  if (!data) return;
+  const html = `<div class="msg-system"><b>System:</b> 🔍 Klassifikation zur Frage «${data.question}»: JA (${data.yes.length}): ${formatGroup(data.yes)} NEIN (${data.no.length}): ${formatGroup(data.no)}</div>`;
+
+  // Je nachdem, ob gerade der Chatverlauf-Rückblick offen ist (nach
+  // Rundenende) oder das laufende Spiel, geht die Ausgabe an die
+  // jeweils sichtbare Stelle.
+  const reviewOpen = !document.getElementById("chatReview").classList.contains("hidden");
+  if (reviewOpen) {
+    const container = document.getElementById("chatReviewContent");
+    container.innerHTML += html;
+    container.scrollTop = container.scrollHeight;
+  } else {
+    chatDiv.innerHTML += html;
+    chatDiv.scrollTop = chatDiv.scrollHeight;
+  }
+}
+
+/* ---------- Frage verarbeiten ---------- */
+async function send() {
+  // VERSION 60: Solange die vorige Frage noch verarbeitet wird, wird
+  // eine weitere Eingabe (z. B. per Enter-Taste) ignoriert – der Text
+  // bleibt im Eingabefeld stehen. Am 28.10. gingen sonst Antworten
+  // verloren (die Liste sprang zurück auf alle Kandidaten).
+  if (!roundActive || sending) return;
+  const input = document.getElementById("questionInput");
+  const question = input.value.trim();
+  if (!question) return;
+  input.value = "";
+
+  addMessage("Kind", question);
+  const kidChatIndex = chatLog.length - 1; // VERSION 58: Verknüpfung Chat ↔ Ergebnis
+
+  // Grundprüfung (regelbasiert, kein API-Aufruf): enthält die
+  // Eingabe überhaupt genug Buchstaben, um ein sinnvoller Satz zu
+  // sein? Fängt Eingaben wie "...", "??", "123" oder leere
+  // Interpunktion ab, BEVOR irgendeine Klassifikation läuft.
+  const letterCount = (question.match(/[a-zA-ZäöüÄÖÜßàéè]/g) || []).length;
+  if (letterCount < 3) {
+    addMessage("20Q-Chatbot", "❌ Das ist kein vollständiger Satz. Bitte stelle eine richtige Frage.");
+    return;
+  }
+
+  // Direkt nach einem "Denkanstoss" (vorzeitiges Scannen / kein
+  // Informationsgewinn): prüfen, ob wirklich eine neue Frage gestellt
+  // wurde (statt einer kurzen Direktantwort wie "ja"). Gilt NICHT
+  // nach einer "Wie meinst du X?"-Klärungsfrage – dort ist eine
+  // kurze Antwort (z. B. "grösser als ein Hund") genau das erwartete
+  // und erwünschte Verhalten, wird also normal weiterverarbeitet.
+  // Unvollständige Frage wie "Ist es" oder "Bist du" (kam in den
+  // Klassendaten vor und wurde von der KI mit "Ja" beantwortet).
+  if (isIncompleteQuestion(question)) {
+    addMessage("20Q-Chatbot", "🙂 Deine Frage ist noch nicht fertig. Was möchtest du wissen? Zum Beispiel: «Ist es ein …?» oder «Hat es …?»");
+    return;
+  }
+
+  if (awaitingNewQuestion) {
+    // Beginnt die Eingabe wie eine Frage ("Hat es…", "Ist es…", "Bist du…"),
+    // gilt sie als neue Frage – auch ohne Fragezeichen.
+    const startsLikeQuestion = /^(ist|bist|hat|hast|kann|kannst|wird|lebt|arbeitet|arbeitest|macht|machst|braucht|gibt|fährt|frisst|isst|tut|tust|muss|darf|sind|war)\b/i.test(question);
+    const looksLikeDirectReply = !question.includes("?") && !startsLikeQuestion && question.split(/\s+/).length <= 4;
+    if (looksLikeDirectReply) {
+      addMessage("20Q-Chatbot", "Das war eine Antwort, keine neue Frage 🙂 Stell mir jetzt eine ganze Frage über das gesuchte Ding – z. B. «Ist es …?» oder «Wird es …?».");
+      return;
+    }
+  }
+  awaitingNewQuestion = false;
+
+  playClickSound();
+  setAvatarMood("thinking");
+  document.getElementById("sendBtn").disabled = true;
+  const previousStatus = statusDiv.textContent;
+  if (candidates.length > 80) statusDiv.textContent = "Der Coach überlegt...";
+
+  const before = [...candidates];
+  sending = true;
+  let answerSource = "KI";     // VERSION 60: woher die Antwort stammt (für den Export)
+  let answerCorrected = false; // VERSION 60: Antwort durch Einzelprüfung korrigiert?
+
+  try {
+    // Gilt für ALLE Runden: Doppelfragen ("X und Y?", "nicht X und
+    // nicht Y?") führen zu unzuverlässigen/widersprüchlichen
+    // Antworten, weil unklar ist, worauf sich Ja/Nein bezieht.
+    // Wird abgelehnt, bevor irgendeine andere Prüfung/Klassifikation
+    // läuft – die Frage zählt nicht, Kandidaten bleiben unverändert.
+    // Kombiniert mit der Fragetyp-Bestimmung in einem einzigen
+    // API-Aufruf (spart einen separaten Call pro Frage).
+    // (4) Für die KI: du-Form -> es-Form, Fragezeichen ergänzen.
+    const aiQuestion = normalizeQuestionForAI(question);
+
+    // (1) Direkte Vermutung lokal erkennen (ohne KI). Ist es genau das
+    // Geheimnis, gilt die Frage sicher als richtige Lösung – unabhängig
+    // von Fragezeichen, du-Form oder kleinen Tippfehlern.
+    const guessedCandidate = findGuessedCandidate(question, topicName);
+    const guessedSecret = guessedCandidate === secret;
+
+    // VERSION 60: Buchstaben- und einfache Tierfragen lokal beantworten
+    const localRule = guessedCandidate ? null
+      : (letterRuleAnswer(question, before, lastWasLetterQuestion) || animalRuleAnswer(question, topicName, before));
+    lastWasLetterQuestion = !!(localRule && /^Buchstabenregel/.test(localRule.label));
+
+    let isNotYesNo = false, isMeaningless = false, isCompound = false, type = "hypothesis-scanning";
+    if (localRule) {
+      type = "constraint-seeking";
+    } else if (!guessedCandidate) {
+      ({ isNotYesNo, isMeaningless, isCompound, type } = await analyzeQuestion(aiQuestion, topicName));
+      // VERSION 60: Fragen wie "Fliegt es?" nie als "unverständlich" ablehnen
+      if (isMeaningless && looksLikeRealQuestion(question)) isMeaningless = false;
+    }
+    if (isNotYesNo) {
+      addMessage("20Q-Chatbot", "❌ Bitte stelle nur Ja-/Nein-Fragen.");
+      playHintSound();
+      setAvatarMood("idle");
+      updateStatus();
+      return;
+    }
+    if (isMeaningless) {
+      addMessage("20Q-Chatbot", "❌ Das ist kein verständlicher Satz. Bitte stelle eine richtige Frage." + questionMarkHint(question));
+      playHintSound();
+      setAvatarMood("idle");
+      updateStatus();
+      return;
+    }
+    if (isCompound) {
+      addMessage("20Q-Chatbot", "❌ Das waren zwei Fragen auf einmal – das geht leider nicht. Bitte stell mir nur eine Frage nach der anderen!");
+      playHintSound();
+      setAvatarMood("idle");
+      updateStatus();
+      return;
+    }
+
+    // In Runde 2: zuerst prüfen, ob die Frage ein vages/subjektives
+    // Wort ohne festen Massstab enthält (z. B. "gross", "gefährlich").
+    // Falls ja, KEINE Klassifikation durchführen, sondern das Kind
+    // bitten, die Frage genauer zu formulieren – die Frage zählt
+    // nicht und die Kandidaten bleiben unverändert.
+    // AUSNAHME: Folgt die Frage dem Muster "...er als ein/eine X"
+    // bzw. "so X wie Y" (unabhängig vom Adjektiv, z. B. auch
+    // "gesünder als ein Schokoriegel"), gilt sie als klar genug und
+    // wird NICHT als vage geprüft. Sonst würde z. B. genau das
+    // Beispiel, das wir dem Kind selbst als Klärung vorschlagen, bei
+    // jedem neuen Adjektiv wieder abgelehnt.
+    const hasReferenceSize = isComparativeWithObject(question);
+    if (currentRound === 2 && !guessedCandidate && !localRule && !hasReferenceSize && interventionAttempts < INTERVENTION_LIMIT) {
+      const vague = await checkVagueQuestion(aiQuestion);
+      if (vague) {
+        interventionAttempts++;
+        const isGroup = vague.category === "gruppe";
+        const rueckfrage = "Ich bin mir nicht sicher. Kannst du bitte den Satz umformulieren?" + questionMarkHint(question);
+
+        coachingLog.push({
+          runde: 2,
+          versuch: interventionAttempts,
+          frage: question,
+          grund: isGroup ? "vage_frage_gruppe" : "vage_frage_allgemein",
+          rueckfrage: rueckfrage
+        });
+        chatLog[kidChatIndex].coaching = isGroup ? "vage_frage_gruppe" : "vage_frage_allgemein";
+
+        addMessage("20Q-Chatbot", `❓ ${rueckfrage}`);
+        playHintSound();
+        setAvatarMood("coaching");
+        awaitingNewQuestion = true;
+        updateStatus();
+        return;
+      }
+    }
+
+    // (2) Wiederholte Frage: gleiche Antwort wie beim ersten Mal,
+    // KEINE weiteren Kandidaten streichen.
+    const qKey = questionKey(question);
+    const previous = (!guessedSecret && qKey) ? askedQuestions[qKey] : null;
+
+    let yes, no;
+    if (guessedSecret) {
+      yes = [secret];
+      no = before.filter(c => c !== secret);
+      answerSource = "Vermutung (lokal erkannt)";
+    } else if (previous) {
+      yes = previous.answer === "Ja" ? [...before] : [];
+      no = previous.answer === "Ja" ? [] : [...before];
+      answerSource = "Wiederholung";
+    } else if (localRule) {
+      yes = localRule.yes;
+      no = localRule.no;
+      answerSource = localRule.label;
+    } else {
+      // Bei einem technischen Fehler wird die Klassifikation einmal
+      // automatisch wiederholt, bevor die "Hoppla"-Meldung erscheint.
+      try {
+        ({ yes, no } = await classifyCandidates(aiQuestion, before));
+      } catch (firstErr) {
+        safeLog("Klassifikation fehlgeschlagen, zweiter Versuch:", firstErr);
+        ({ yes, no } = await classifyCandidates(aiQuestion, before));
+      }
+
+      // VERSION 60: Kontrollfrage nur für das gesuchte Ding.
+      // Beim Sortieren vieler Kandidaten auf einmal landete das gesuchte
+      // Ding manchmal in der falschen Gruppe (z. B. Wal "hat Beine",
+      // Panda "nicht schwerer als 60 kg", Brezel "süss"). Darum wird die
+      // Frage für das gesuchte Ding einzeln nochmals geprüft; diese
+      // Antwort gilt. Schlägt die Kontrolle technisch fehl, bleibt es
+      // beim Ergebnis der Sortierung (kein "Hoppla").
+      if (before.length > 1) {
+        try {
+          const check = await classifySingleCandidate(aiQuestion, secret);
+          const checkYes = check.yes.includes(secret);
+          const sortYes = yes.includes(secret);
+          if (checkYes !== sortYes) {
+            answerCorrected = true;
+            if (checkYes) { yes = [...yes, secret]; no = no.filter(c => c !== secret); }
+            else { no = [...no, secret]; yes = yes.filter(c => c !== secret); }
+          }
+        } catch (checkErr) {
+          safeLog("Kontrollfrage zum gesuchten Ding fehlgeschlagen:", checkErr);
+        }
+      }
+    }
+    lastClassification = { question, yes: [...yes], no: [...no] };
+
+    // Bestimme, in welcher Gruppe das Geheimnis liegt
+    const secretInYes = yes.includes(secret);
+    const answer = secretInYes ? "Ja" : "Nein";
+    const after = secretInYes ? yes : no;
+
+    // Stopping-Rule: eine Frage gilt als überflüssig, wenn schon VOR
+    // dieser Frage nur noch 1 Kandidat übrig war – AUSSER es ist genau
+    // die nötige, bestätigende Vermutung, die die Runde beendet. Diese
+    // eine finale Frage ist erwartet und keine Verletzung.
+    const isWinningGuess = (type === "hypothesis-scanning" && answer === "Ja" && after.length === 1);
+    const stoppingViolation = (before.length <= 1) && !isWinningGuess;
+
+    // Vorzeitiges Scannen: eine Frage, die ein konkretes Einzelding
+    // nennt, obwohl der Suchraum noch grösser als 2 war.
+    const prematureScanning = (type === "hypothesis-scanning" && before.length > 2);
+
+    // Kein Informationsgewinn: die Frage hat den Suchraum nicht
+    // verkleinert (unabhängig vom Fragetyp) – z. B. weil eine
+    // Einzelvermutung keinen der tatsächlich verbleibenden
+    // Kandidaten trifft, oder eine Eigenschaftsfrage nicht
+    // zwischen den verbleibenden Kandidaten unterscheidet.
+    const noInfoGain = (after.length === before.length && before.length > 1);
+
+    // In Runde 2 greift der Coach ein, statt direkt zu antworten,
+    // wenn die Frage ineffizient war – die Frage zählt dann NICHT
+    // und die Kandidaten bleiben unverändert, das Kind darf nochmal
+    // fragen. Nach INTERVENTION_LIMIT aufeinanderfolgenden Eingriffen
+    // wird trotzdem normal geantwortet, damit niemand stecken bleibt.
+    // WICHTIG: Eine korrekte, bestätigte Vermutung (isWinningGuess)
+    // hat IMMER Vorrang vor einem Coaching-Eingriff – auch wenn sie
+    // strukturell als "vorzeitig" gilt. Ein Kind, das richtig rät,
+    // soll nie mit einer Rückfrage abgewiesen werden.
+    // VERSION 60: Nur noch das vorzeitige Raten löst einen Denkanstoss
+    // OHNE Antwort aus. Bei "kein Informationsgewinn" antwortet der
+    // Chatbot jetzt normal und hängt einen kurzen Hinweis an (Feedback
+    // LA, 28.10.: "es kam mega oft ein tipp obwohl die frage wichtig war
+    // und die Frage wurde mir dann nie beantwortet").
+    const isInefficient = prematureScanning && !isWinningGuess;
+
+    if (currentRound === 2 && isInefficient && !previous && interventionAttempts < INTERVENTION_LIMIT) {
+      interventionAttempts++;
+      const reason = prematureScanning ? "premature" : "no_info_gain";
+      const hint = await generateSocraticHint(question, reason, before.length);
+
+      coachingLog.push({
+        runde: 2,
+        versuch: interventionAttempts,
+        frage: question,
+        grund: reason === "premature" ? "vorzeitiges_scannen" : "kein_informationsgewinn",
+        rueckfrage: hint
+      });
+      chatLog[kidChatIndex].coaching = reason === "premature" ? "vorzeitiges_scannen" : "kein_informationsgewinn";
+
+      addMessage("20Q-Chatbot", `🤔 ${hint}\n\n👉 Du musst mir darauf nicht antworten – stell mir stattdessen eine neue Frage!`);
+      playHintSound();
+      setAvatarMood("coaching");
+      awaitingNewQuestion = true;
+      updateStatus();
+      return;
+    }
+
+    interventionAttempts = 0;
+
+    questionNumber++;
+    candidates = after;
+
+    log.push({
+      runde: currentRound,
+      nr: questionNumber,
+      frage: question,
+      antwort: answer,
+      kandidaten_vorher: before.length,
+      kandidaten_nachher: after.length,
+      typ: type,
+      stopping_rule_verletzt: stoppingViolation ? "ja" : "nein",
+      vorzeitiges_scannen: prematureScanning ? "ja" : "nein",
+      kein_informationsgewinn: noInfoGain ? "ja" : "nein",
+      quelle: answerSource,                         // VERSION 60
+      korrigiert: answerCorrected ? "ja" : "nein"   // VERSION 60
+    });
+    chatLog[kidChatIndex].nr = questionNumber; // VERSION 58
+
+    // Klassifikation dieser spezifischen Frage separat speichern (nicht
+    // nur die letzte), damit die Lehrperson auch nach Rundenende noch
+    // gezielt bei JEDER Frage nachschauen kann, nicht nur der letzten.
+    questionClassifications[questionNumber] = { question, yes: [...yes], no: [...no] };
+    const iconHiddenClass = teacherModeUnlocked ? "" : " hidden";
+    const debugIcon = `<span class="teacher-icon${iconHiddenClass}" onclick="showClassificationFor(${questionNumber})" style="cursor:pointer; margin-left:6px;" title="Warum diese Antwort? (nur Lehrperson)">🔍</span>`;
+
+    if (!previous && qKey) askedQuestions[qKey] = { nr: questionNumber, answer };
+
+    if (previous) {
+      addMessage("20Q-Chatbot", `${answer} – das hast du schon bei Frage ${previous.nr} gefragt. 🙂 Versuch es mit einer neuen Frage!${debugIcon}`);
+    } else if (currentRound === 2 && noInfoGain && !isWinningGuess && !prematureScanning) {
+      // VERSION 60: Antwort + kurzer Hinweis (statt Denkanstoss ohne Antwort)
+      addMessage("20Q-Chatbot", `${answer}${debugIcon}\n💡 Diese Frage hat leider keine Möglichkeit ausgeschlossen – bei allen Dingen, die noch übrig sind, ist die Antwort gleich.`);
+      chatLog[kidChatIndex].coaching = "kein_informationsgewinn_hinweis";
+      coachingLog.push({ runde: 2, versuch: 0, frage: question, grund: "kein_informationsgewinn_hinweis", rueckfrage: "Antwort + Hinweis" });
+    } else {
+      addMessage("20Q-Chatbot", answer + debugIcon);
+    }
+    playAnswerSound(answer);
+    setAvatarMood("happy");
+    updateStatus();
+    if (document.getElementById("candidateList").style.display !== "none") {
+      renderCandidateList();
+    }
+
+    // Hinweis NUR dann, wenn das Kind trotz nur noch 1 verbleibender
+    // Möglichkeit eine weitere Frage stellt, statt zu raten (=
+    // genau der Moment der Stopping-Rule-Verletzung). Nicht bei der
+    // siegreichen Vermutung selbst (das ist ja kein "Weiterfragen"),
+    // nur in Runde 2 (Coaching-Kontext). Kann bei wiederholtem
+    // Weiterfragen auch mehrfach erscheinen.
+    if (currentRound === 2 && stoppingViolation) {
+      addMessage("20Q-Chatbot", "💡 Es gibt nur noch eine Möglichkeit! Du kannst jetzt langsam anfangen zu raten, was es sein könnte.");
+    }
+
+    // Sieg nur bei einer EXPLIZITEN, bestätigten Vermutung (hypothesis-
+    // scanning-Frage, die mit "Ja" beantwortet wurde und eindeutig auf
+    // genau 1 Kandidat führt). Das blosse rechnerische Erreichen von
+    // 1 verbleibendem Kandidaten durch eine Eigenschaftsfrage zählt
+    // NICHT automatisch als Sieg – das Kind muss das Ding noch selbst
+    // benennen.
+    if (isWinningGuess) {
+      // Nur in Runde 2: prüfen, ob die Vermutung nur eine
+      // allgemeinere Kategorie trifft (z. B. "Brot" statt
+      // "Baguette"). Falls ja, kein voller Sieg, sondern ein
+      // Hinweis, der zur präziseren Vermutung anregt.
+      if (currentRound === 2 && !guessedSecret) {
+        const genericCheck = await checkGenericMatch(aiQuestion, secret, topicName);
+        if (!genericCheck.exact) {
+          const hint = genericCheck.hint || `Das ist im weiteren Sinn richtig, aber es gibt einen genaueren Begriff.`;
+          addMessage("20Q-Chatbot", `${answer} – ${hint} Kannst du noch genauer werden?`);
+          setAvatarMood("coaching");
+          updateStatus();
+          return;
+        }
+      }
+      addMessage("System", `🎉 Gut gemacht! Richtig erraten! Es war «${secret}». Runde beendet nach ${questionNumber} Fragen.`);
+      endRound(true, "geloest");
+      return;
+    }
+    if (questionNumber >= 20) {
+      addMessage("System", `Maximale Fragenzahl erreicht. Es war «${secret}».`);
+      endRound(false, "max_fragen_erreicht");
+      return;
+    }
+
+  } catch (err) {
+    // Für das Kind: freundliche Rückfrage im normalen Chatbot-Stil (blau).
+    addMessage("20Q-Chatbot", "🤔 Hoppla, das habe ich gerade nicht verstanden. Kannst du die Frage bitte nochmal stellen oder anders formulieren?" + questionMarkHint(question));
+    // Für die Lehrperson: technische Details in Rot, nur nach PIN-Eingabe
+    // sichtbar (auch im Chatverlauf-Rückblick) – für Fehlermeldungen.
+    const techHidden = teacherModeUnlocked ? "" : " hidden";
+    chatDiv.innerHTML += `<div class="msg-system teacher-icon${techHidden}"><b>System (nur Lehrperson):</b> ⚠️ Technischer Fehler bei der Frage «${question}»: ${err.message || "unbekannter Fehler"}</div>`;
+    recordChat("System (nur Lehrperson)", `⚠️ Technischer Fehler bei der Frage «${question}»: ${err.message || "unbekannter Fehler"}`);
+    chatDiv.scrollTop = chatDiv.scrollHeight;
+    setAvatarMood("idle");
+    updateStatus();
+    safeLog(err);
+  } finally {
+    sending = false;
+    document.getElementById("sendBtn").disabled = false;
+  }
+}
+
+/* ---------- LLM-Klassifikation ----------
+   Teilt die aktuell verbleibenden Kandidaten anhand der gestellten
+   Frage in eine JA- und eine NEIN-Gruppe.
+------------------------------------------------------------------ */
+async function classifyCandidates(question, candidateList) {
+  const BATCH_SIZE = 80;
+  let yes = [], no = [];
+
+  for (let i = 0; i < candidateList.length; i += BATCH_SIZE) {
+    const batch = candidateList.slice(i, i + BATCH_SIZE);
+    const result = await classifyBatch(question, batch);
+    yes = yes.concat(result.yes);
+    no = no.concat(result.no);
+  }
+  return { yes, no };
+}
+
+async function classifyBatch(question, batch) {
+  // Sonderfall: nur noch EIN Kandidat übrig. Der generelle Listen-
+  // Prompt (für viele Kandidaten gedacht) verwirrt die KI hier
+  // unnötig – das ist genau der entscheidende Moment, in dem ein
+  // Kind eigentlich gewinnen sollte. Direkterer, einfacherer Prompt.
+  if (batch.length === 1) {
+    return classifySingleCandidate(question, batch[0]);
+  }
+
+  const studyHint = findProfessionStudyHint(question, topicName);
+  const studyHintText = studyHint ? `\n${studyHint}` : "";
+  const roadHint = findVehicleRoadHint(question, topicName);
+  const roadHintText = roadHint ? `\n${roadHint}` : "";
+  const foodHint = findFoodCategoryHint(question, topicName);
+  const foodHintText = foodHint ? `\n${foodHint}` : "";
+  const originHint = findAnimalOriginHint(question, topicName);
+  const originHintText = originHint ? `\n${originHint}` : "";
+  const featureHint = findProfessionFeatureHint(question, topicName);
+  const featureHintText = featureHint ? `\n${featureHint}` : "";
+  const animalHint = findAnimalFeatureHint(question, topicName); // VERSION 60
+  const animalHintText = animalHint ? `\n${animalHint}` : "";
+
+  const prompt = `Hier ist eine Liste möglicher Dinge: ${batch.join(", ")}.
+Frage: "${question}"${studyHintText}${roadHintText}${foodHintText}${originHintText}${featureHintText}${animalHintText}
+Entscheide für JEDES Ding aus der Liste, ob die Antwort auf diese Frage JA oder NEIN wäre.
+
+Wichtige Regeln:
+1. Wenn die Frage sowohl die männliche als auch die weibliche Form eines Begriffs nennt (z. B. "Ärztin/Arzt", "Pfleger/Pflegerin", "Lehrerin/Lehrer"), behandle das als EINEN einzigen, geschlechtsneutralen Begriff und vergleiche ihn normal mit den Einträgen der Liste.
+2. Behandle unterschiedliche, eigenständige Einträge der Liste als UNTERSCHIEDLICH, auch wenn sie einen gemeinsamen Wortbestandteil haben. Zum Beispiel ist "Zahnarzt" NICHT dasselbe wie "Arzt", und "Tierarzt" ist NICHT dasselbe wie "Arzt" – auch wenn alle drei "arzt" enthalten, sind es unterschiedliche, eigenständige Berufe. Ordne einen Eintrag nur dann JA zu, wenn er inhaltlich WIRKLICH dem in der Frage gemeinten Ding entspricht (bzw. dessen Geschlechtsform gemäss Regel 1), nicht nur, weil ein Wortteil übereinstimmt.
+3. Regionale Synonyme gelten als dasselbe Ding: "Velo" = "Fahrrad" (Schweizerdeutsch), "Töff" = "Motorrad", "Auto" = "Personenwagen" = "PKW". Fragt das Kind z. B. "Ist es ein Velo?", ist das identisch mit "Ist es ein Fahrrad?".
+
+Denke ZUERST für dich selbst kurz nach (1–3 Sätze): Prüfe bei jedem Ding aus der Liste kurz die tatsächlichen Fakten (z. B. welche physischen Eigenschaften es hat), bevor du dich festlegst. Das hilft, einfache Faktenfehler zu vermeiden.
+
+Schreibe DANACH auf einer eigenen, letzten Zeile ausschliesslich das Ergebnis in diesem Format (ohne Markdown-Codeblock):
+ERGEBNIS: {"JA": ["...", "..."], "NEIN": ["...", "..."]}
+Jedes Ding aus der Liste muss in genau einer der beiden Gruppen erscheinen.`;
+
+  const content = await callOpenAI([
+        { role: "system", content: "Du klassifizierst Objekte für ein Ja/Nein-Ratespiel. Denke kurz nach, dann antworte im vorgegebenen Format mit einer abschliessenden JSON-Zeile." },
+        { role: "user", content: prompt }
+      ], 0); // VERSION 60: mit Wiederholung
+  const rawText = content;
+  // Robust: das JSON-Objekt wird per Regex aus der Antwort extrahiert,
+  // unabhängig davon, wie viel Denktext davor steht.
+  const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Keine gültige JSON-Antwort in der Klassifikation gefunden.");
+  const parsed = JSON.parse(jsonMatch[0]);
+
+  // Absicherung: falls die KI ein Ding vergisst, wird es sicherheitshalber
+  // der NEIN-Gruppe zugeordnet, damit keine Kandidaten "verschwinden".
+  const yes = batch.filter(c => (parsed.JA || []).includes(c));
+  const no = batch.filter(c => !yes.includes(c));
+  return { yes, no };
+}
+
+/* ---------- Einzelkandidat-Klassifikation ----------
+   Einfacher, direkter Ja/Nein-Prompt für genau EINEN verbleibenden
+   Kandidaten – zuverlässiger als der Listen-Prompt für diesen Fall,
+   weil kein JSON-Array mit nur einem Eintrag interpretiert werden
+   muss und die Frage direkt und unzweideutig gestellt wird.
+------------------------------------------------------------------ */
+async function classifySingleCandidate(question, candidate) {
+  const studyHint = findProfessionStudyHint(question, topicName);
+  const studyHintText = studyHint ? `\n${studyHint}` : "";
+  const roadHint = findVehicleRoadHint(question, topicName);
+  const roadHintText = roadHint ? `\n${roadHint}` : "";
+  const foodHint = findFoodCategoryHint(question, topicName);
+  const foodHintText = foodHint ? `\n${foodHint}` : "";
+  const originHint = findAnimalOriginHint(question, topicName);
+  const originHintText = originHint ? `\n${originHint}` : "";
+  const featureHint = findProfessionFeatureHint(question, topicName);
+  const featureHintText = featureHint ? `\n${featureHint}` : "";
+  const animalHint = findAnimalFeatureHint(question, topicName); // VERSION 60
+  const animalHintText = animalHint ? `\n${animalHint}` : "";
+
+  const prompt = `Das gesuchte Ding ist: "${candidate}".
+Frage: "${question}"${studyHintText}${roadHintText}${foodHintText}${originHintText}${featureHintText}${animalHintText}
+
+Trifft diese Frage auf "${candidate}" zu?
+Beachte: Männliche und weibliche Formen desselben Begriffs (z. B. "Sänger"/"Sängerin", "Arzt"/"Ärztin") gelten als dasselbe – wenn die Frage direkt nach "${candidate}" (in egal welcher Geschlechtsform) fragt, ist die Antwort JA. Ebenso gelten regionale Synonyme als dasselbe ("Velo" = "Fahrrad", "Töff" = "Motorrad", "Auto" = "Personenwagen" = "PKW").
+
+Denke ZUERST kurz nach (1–2 Sätze): Prüfe die tatsächlichen Fakten zu "${candidate}", bevor du dich festlegst.
+
+Schreibe DANACH auf einer eigenen, letzten Zeile ausschliesslich: ANTWORT: JA oder ANTWORT: NEIN`;
+
+  const content = await callOpenAI([
+        { role: "system", content: "Du beantwortest eine einfache Ja/Nein-Frage zu genau einem Ding. Denke kurz nach, dann antworte im vorgegebenen Format mit einer abschliessenden Zeile." },
+        { role: "user", content: prompt }
+      ], 0); // VERSION 60: mit Wiederholung
+  const rawText = content.toUpperCase();
+  // Robust: nur die letzte "ANTWORT: JA/NEIN"-Zeile zählt, nicht der
+  // Denktext davor (der könnte "ja" oder "nein" beiläufig erwähnen).
+  const answerMatch = rawText.match(/ANTWORT:\s*(JA|NEIN)/);
+  const finalAnswer = answerMatch ? answerMatch[1] : rawText;
+  const isYes = finalAnswer.includes("JA") && !finalAnswer.includes("NEIN");
+
+  return isYes ? { yes: [candidate], no: [] } : { yes: [], no: [candidate] };
+}
+
+/* ---------- Generisch-Treffer-Prüfung (nur Runde 2, nur beim Sieg) ----------
+   Manchmal trifft eine Gewinnfrage nur eine ALLGEMEINERE Kategorie,
+   die zufällig auch als eigenständiges, spezifischeres Ding in der
+   Liste vorkommt (z. B. Frage "Ist es Brot?" bei Geheimnis
+   "Baguette" – korrekt im weiteren Sinn, aber "Brot" existiert auch
+   separat in der Liste als generischere Variante). Diese Prüfung
+   läuft NUR im Moment eines möglichen Sieges in Runde 2 (selten,
+   daher vertretbarer Zusatzaufwand) und gibt einen Hinweis statt
+   eines vollen Sieges, falls die Vermutung zu unspezifisch war.
+------------------------------------------------------------------ */
+async function checkGenericMatch(question, secret, topic) {
+  const prompt = `In einem Ja/Nein-Ratespiel (Kategorie: "${topic}") wurde die Frage "${question}" gestellt und mit "Ja" beantwortet. Das tatsächliche Geheimnis ist "${secret}".
+
+Ist "${secret}" GENAU das, wonach in der Frage gefragt wurde, oder fragt die Frage nach einer ALLGEMEINEREN/GRUNDLEGENDEREN Kategorie, zu der "${secret}" zwar korrekt gehört, aber es gäbe einen SPEZIFISCHEREN, passenderen Begriff (der z. B. auch als eigenständiges Ding in einer Liste zur Kategorie "${topic}" vorkommen könnte)?
+
+Beispiel für NICHT exakt: Frage "Ist es Brot?", Geheimnis "Baguette" -> ein Baguette ist zwar Brot, aber "Brot" ist der allgemeinere Begriff, "Baguette" der spezifischere.
+Beispiel für exakt: Frage "Ist es ein Baguette?", Geheimnis "Baguette" -> exakt derselbe Begriff.
+
+Antworte AUSSCHLIESSLICH als reines JSON-Objekt, ohne zusätzlichen Text:
+{"exakt": true oder false, "hinweis": "<falls nicht exakt: ein kurzer Satz wie 'Es ist ein Brot, aber ein bestimmtes Brot.', sonst leerer String>"}`;
+
+  try {
+    const content = await callOpenAI([
+          { role: "system", content: "Du prüfst, ob eine Vermutung im Ratespiel exakt oder nur allgemein-kategorial richtig war. Antworte ausschliesslich mit validem JSON." },
+          { role: "user", content: prompt }
+        ], 0); // VERSION 60: mit Wiederholung
+    let text = content;
+    text = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(text);
+    return { exact: parsed.exakt !== false, hint: (parsed.hinweis || "").trim() };
+  } catch (err) {
+    safeLog("Generisch-Treffer-Prüfung fehlgeschlagen, Sieg wird trotzdem gewertet:", err);
+    return { exact: true, hint: "" };
+  }
+}
+
+/* ---------- Kombinierte Analyse: Doppelfrage + Fragetyp ----------
+   Fasst zwei frühere separate API-Aufrufe (Doppelfragen-Erkennung
+   und semantische Fragetyp-Klassifikation) in EINEN Aufruf zusammen,
+   um die Anzahl API-Calls pro Frage zu senken. Beide Prüfungen
+   brauchen nur den Fragetext (+ Thema) – keine Abhängigkeit von der
+   Kandidatenliste – lassen sich also unabhängig vom Klassifikations-
+   Aufruf vorab in einem Rutsch beantworten.
+
+   Gibt zurück: { isCompound: boolean, type: "constraint-seeking" | "hypothesis-scanning" }
+   (type ist bei isCompound=true irrelevant und wird nicht verwendet)
+------------------------------------------------------------------ */
+async function analyzeQuestion(question, topic) {
+  const prompt = `Du analysierst eine Frage aus einem Ja/Nein-Ratespiel. Die Kategorie des gesuchten Dings ist "${topic}".
+
+Beantworte VIER Dinge zu diesem Text: "${question}"
+
+0. IST ES EINE JA/NEIN-FRAGE: Lässt sich der Text grundsätzlich mit "Ja" oder "Nein" beantworten? Ja/Nein-Fragen beginnen typischerweise mit einem Verb oder Hilfsverb ("Ist...", "Hat...", "Kann...", "Arbeitet...", "Wird...", "Braucht...").
+   W-Fragen sind KEINE Ja/Nein-Fragen, auch wenn sie inhaltlich sinnvoll und auf das gesuchte Ding bezogen sind – sie fragen nach einer offenen Information, nicht nach Ja/Nein: "Wer...", "Was...", "Wann...", "Wo...", "Warum...", "Wieso...", "Weshalb...", "Wie lange...", "Wie viel...", "Wie oft...", "Welche...".
+   Beispiele NICHT Ja/Nein: "Wer macht diesen Beruf?", "Wie lange arbeitet man?", "Warum gibt es diesen Beruf?", "Wann entstand dieser Beruf?", "Was macht man da?".
+   Beispiele Ja/Nein: "Ist es ein Beruf mit viel Kontakt zu Menschen?", "Arbeitet man draussen?", "Braucht man eine Ausbildung?".
+
+1. GÜLTIGE SPIELFRAGE (nur relevant, falls es eine Ja/Nein-Frage ist): Ist das eine gültige Frage IN DIESEM SPIEL – also eine Frage oder ein kurzer Ausdruck, der sich auf eine mögliche EIGENSCHAFT oder IDENTITÄT DES GESUCHTEN DINGS (Kategorie: "${topic}") bezieht?
+
+Antworte NEIN (ungültig) in JEDEM dieser Fälle:
+- Zufällige Buchstabenfolge/sinnloses Tastatur-Gemenge (z. B. "setrtfzuhiklöälknjbhvgcfdxfcgvhbjknl").
+- JEDE Aussage über das KIND SELBST statt über das gesuchte Ding – erkennbar an "Ich bin...", "Ich habe...", "Ich heisse...", "Mein/Meine...". Das gilt UNABHÄNGIG vom Inhalt der Aussage, auch wenn die genannte Eigenschaft (z. B. "gross und schwer") zufällig wie eine Eigenschaft klingt, die auch auf das gesuchte Ding zutreffen könnte. Beispiele: "Ich heisse Johnny", "Ich bin 12 Jahre alt", "Ich habe am 19.11 Geburtstag", "Ich bin gross und schwer" (auch DIES ist eine Aussage über das Kind, keine Frage zum gesuchten Ding!).
+- Eine allgemeine Wissens-/Weltfrage, die NICHTS mit dem gesuchten Ding zu tun hat (z. B. "Wer hat das Spiel gewonnen?", "Am Freitag hat Argentinien gewonnen?", Sportergebnisse, Wetter, Uhrzeit).
+
+Antworte JA (gültig) bei jeder echten Frage/jedem echten Ausdruck ÜBER DAS GESUCHTE DING (nicht über das Kind), auch wenn kurz, umgangssprachlich, unvollständig oder grammatikalisch unsauber (z. B. "Räder?", "gross?" oder "Ist es gross?" gelten als gültig).
+
+2. Prüfe SYSTEMATISCH anhand dieser drei Kriterien, ob der Satz in Wirklichkeit ZWEI ODER MEHR getrennte Fragen enthält (nur relevant, falls es eine gültige Ja/Nein-Spielfrage ist):
+   a) KONJUNKTION: Enthält der Satz ein verbindendes Wort zwischen zwei eigenständigen Aussagen ("und", "oder", "sowohl...als auch", "weder...noch", "aber", "beziehungsweise")?
+   b) MEHRERE PRÄDIKATE: Gibt es mehr als eine Eigenschaft/Tätigkeit/Aussage, die JEWEILS EINZELN mit Ja oder Nein beantwortet werden müsste (d. h. die Antworten könnten für die beiden Teile unterschiedlich ausfallen)?
+   c) AUSNAHME – EIN zusammenhängendes Konzept: Auch wenn (a) zutrifft, ist es TROTZDEM nur EINE Frage, wenn die verbundenen Begriffe zusammen EIN EINZIGES Konzept bilden. Die Ausnahme gilt NUR, wenn die verbundenen Begriffe zur SELBEN, ähnlichen Bedeutungsebene gehören (z. B. beides Altersgruppen, beides Fahrzeugtypen), NICHT wenn sie zu grundsätzlich VERSCHIEDENEN Kategorien gehören, bei denen die Antwort unterschiedlich ausfallen könnte:
+      - Zielgruppen-Aufzählung (Ausnahme gilt): "mit Kindern und Jugendlichen" (beides Altersgruppen, ähnliche Bedeutungsebene)
+      - Vergleich (Ausnahme gilt): "teurer als ein Motorrad", "grösser als ein Hund" (ein Vergleich nennt zwei Dinge, fragt aber nur EINE Sache ab)
+      - Feste Wortpaare/Doppelbegriffe (Ausnahme gilt): "Katz und Maus", "schwarz-weiss"
+      - Kategorien-Disjunktion (Ausnahme gilt NICHT, ist MEHRFACH!): "jemanden oder etwas" (Person vs. Sache sind grundverschiedene Kategorien – ein Beruf könnte Personen schützen, aber keine Sachen, oder umgekehrt), "drinnen oder draussen" wenn als zwei getrennte Eigenschaften gemeint, "Werkzeuge oder die Hände" (verschiedene Mittel, unterschiedliche Antworten möglich)
+      - Unterschiedliche Dimensionen (Ausnahme gilt NICHT, ist MEHRFACH!): "gross und schwer" (Grösse und Gewicht sind zwei unabhängige Dimensionen – etwas kann gross und leicht sein, oder klein und schwer; die Antworten könnten sich unterscheiden), ebenso "schnell und laut", "teuer und selten"
+
+   → Es gilt als MEHRFACH nur dann, wenn (a) UND (b) beide zutreffen UND (c) NICHT zutrifft.
+
+   Beispiele für ZWEI Fragen auf einmal (MEHRFACH): "Arbeitet man draussen und mit Tieren?" (zwei unterschiedliche, einzeln beantwortbare Eigenschaften), "Ist es gross oder rund?", "Arbeitet man nicht mit Werkzeugen und nicht mit den Händen?", "Schützt man jemanden oder etwas?" (Person vs. Sache – grundverschiedene Kategorien), "Ist es gross und schwer?" (zwei unabhängige Dimensionen)
+   Beispiele für EINE Frage (EINZEL): "Arbeitet man mit Kindern und Jugendlichen?" (Ausnahme c: Zielgruppe, ähnliche Bedeutungsebene), "Ist es teurer als ein Motorrad?" (Ausnahme c: Vergleich), "Hat es Räder?" (keine Konjunktion).
+
+3. Falls es eine gültige Ja/Nein-EINZEL-Frage ist, welcher Typ:
+   - "constraint-seeking": Die Frage bezieht sich auf eine Eigenschaft, ein Merkmal, eine Tätigkeit oder eine Untergruppe, die grundsätzlich auf MEHRERE unterschiedliche Dinge aus der Kategorie "${topic}" zutreffen könnte. Beispiele: "Arbeitet die Person meist draussen?", "Hat es Räder?", "Ist es aus Metall?". Das gilt AUCH für indirekte Verwendungs-/Eigenschaftsfragen über einen Umweg (ein Gericht, ein Werkzeug, eine andere Sache), z. B. "Kann man daraus Baba Ganoush machen?" (fragt nach einer VERWENDUNGSEIGENSCHAFT – "ist X eine dafür typische/verwendbare Zutat?" –, nennt aber NICHT direkt "Aubergine"), "Kann man damit Nägel einschlagen?" (fragt nach einer Eigenschaft, nennt nicht direkt "Hammer").
+   - "hypothesis-scanning": Die Frage nennt oder erfragt DIREKT ein einzelnes, konkretes Ding aus der Kategorie "${topic}" beim NAMEN – im Kern "Ist es genau DAS eine bestimmte Ding (mit diesem Namen)?". Beispiele: "Ist es ein Bauer?", "Ist es ein Handy?", "Ist es Aubergine?".
+   WICHTIG: Bewerte nur den Inhalt der Frage, unabhängig davon, wie viele echte Dinge in einer bestimmten Liste zufällig passen würden – das Kind kennt diese Liste nicht. Eine Frage wird NUR dann hypothesis-scanning, wenn sie den Namen des Dings selbst nennt/erfragt – ein Umweg über ein Gericht, einen Verwendungszweck oder ein anderes Objekt bleibt IMMER constraint-seeking, selbst wenn er stark auf ein bestimmtes Ding hindeutet.
+
+Antworte AUSSCHLIESSLICH als reines JSON-Objekt, ohne zusätzlichen Text, ohne Markdown-Codeblock, in genau diesem Format:
+{"ja_nein_frage": true oder false, "sinnvoll": true oder false, "konjunktion": true oder false, "mehrere_praedikate": true oder false, "ein_konzept_ausnahme": true oder false, "mehrfach": true oder false, "typ": "constraint-seeking" oder "hypothesis-scanning"}
+(Falls ja_nein_frage=false, setze sinnvoll=false und alle weiteren Felder auf false bzw. "constraint-seeking" als Platzhalter. Falls sinnvoll=false, setze ebenso alle weiteren Felder auf false bzw. "constraint-seeking" als Platzhalter. mehrfach ergibt sich aus: konjunktion UND mehrere_praedikate UND NICHT ein_konzept_ausnahme.)`;
+
+  try {
+    const content = await callOpenAI([
+          { role: "system", content: "Du analysierst Fragen in einem Ratespiel. Antworte ausschliesslich mit validem JSON im vorgegebenen Format." },
+          { role: "user", content: prompt }
+        ], 0); // VERSION 60: mit Wiederholung
+    let text = content;
+    text = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(text);
+    const isNotYesNo = parsed.ja_nein_frage === false;
+    const isMeaningless = parsed.sinnvoll === false;
+    // isCompound wird hier selbst aus den drei Einzelkriterien
+    // berechnet (statt nur parsed.mehrfach zu übernehmen) – das
+    // erzwingt Konsistenz, falls das Modell die Kombination der
+    // eigenen Kriterien mal falsch zusammenzählt.
+    const isCompound = (parsed.konjunktion === true)
+      && (parsed.mehrere_praedikate === true)
+      && (parsed.ein_konzept_ausnahme !== true);
+    const type = parsed.typ === "hypothesis-scanning" ? "hypothesis-scanning" : "constraint-seeking";
+    return { isNotYesNo, isMeaningless, isCompound, type };
+  } catch (err) {
+    safeLog("Fragenanalyse fehlgeschlagen, Fallback auf Einzelfrage/constraint-seeking:", err);
+    return { isNotYesNo: false, isMeaningless: false, isCompound: false, type: "constraint-seeking" };
+  }
+}
+
+/* ---------- Vage-Frage-Erkennung ----------
+   Prüft, ob die Frage ein unklares/subjektives Wort ohne festen
+   Massstab enthält. Zwei Kategorien werden unterschieden:
+   1. GRUPPE: Begriffe wie "Team", "Gruppe", "mit anderen zusammen",
+      die mehrere beteiligte Personen andeuten, ohne eine genaue
+      Anzahl zu nennen.
+   2. ALLGEMEIN: sonstige vage/subjektive Wörter ohne Massstab
+      (z. B. "gross", "gefährlich", "teuer", ohne Vergleichswert).
+   Liefert zusätzlich ein zum Begriff UND Themenfeld passendes
+   Beispiel (z. B. "gefährlich" bei Berufen -> "gefährlicher als
+   Bauarbeiter", nicht ein themenfremdes "grösser als ein Hund").
+   Gibt bei Erkennung { category, term, example } zurück, sonst null.
+------------------------------------------------------------------ */
+async function checkVagueQuestion(question) {
+  // VERSION 57: Lokale, deutlich engere Prüfung statt KI-Aufruf.
+  // In den Klassendaten wurden fast nur brauchbare Fragen als "vage"
+  // abgelehnt (z. B. "Muss es stark sein?", "Hat es mit Haaren zu
+  // tun?", "Braucht man mehrere Leute?"), was die Kinder frustriert hat.
+  // Jetzt gilt eine Frage nur noch als vage, wenn sie
+  //   (a) ein Massstab-Adjektiv aus der Liste unten OHNE Vergleich
+  //       enthält (z. B. "Ist es gross?"), oder
+  //   (b) ausdrücklich "Team" / "Gruppe" nennt.
+  // Die Liste kann bei Bedarf ergänzt oder gekürzt werden.
+  const VAGUE_ADJECTIVES = /\b(gross|groß|grosse|große|grosser|großer|grosses|großes|klein|kleine|kleiner|kleines|teuer|teure|teures|billig|billige|schnell|schnelle|langsam|langsame|gefährlich|gefährliche|gefaehrlich|schwer|schwere|alt|alte|älter|grösser|größer|teurer|schneller|langsamer|schwerer|gefährlicher)\b/i;
+  const GROUP_WORDS = /\b(team|gruppe|gruppen)\b/i;
+
+  if (GROUP_WORDS.test(question)) {
+    return { category: "gruppe", term: (question.match(GROUP_WORDS) || [""])[0] };
+  }
+  const m = question.match(VAGUE_ADJECTIVES);
+  if (m) return { category: "allgemein", term: m[0] };
+  return null;
+}
+
+/* ---------- Rückfrage ----------
+   Wird aufgerufen, wenn eine Frage ineffizient war (vorzeitiges
+   Scannen oder kein Informationsgewinn). Gibt KEINE direkte
+   Antwort und verrät NICHT die Lösung – regt stattdessen zum
+   Nachdenken an, damit das Kind selbst auf eine bessere Frage kommt.
+------------------------------------------------------------------ */
+async function generateSocraticHint(question, reason, remainingCount) {
+  const situation = reason === "premature"
+    ? `Das Kind hat gerade geraten, dass es genau ein bestimmtes Ding ist ("${question}"), obwohl noch ${remainingCount} verschiedene Dinge aus der Kategorie "${topicName}" infrage kommen.`
+    : `Das Kind hat die Frage "${question}" gestellt. Diese Frage hat die ${remainingCount} noch möglichen Dinge NICHT eingegrenzt – alle passen weiterhin gleich gut dazu.`;
+
+  const prompt = `Du bist ein freundlicher, sokratischer Lerncoach für ein Kind der 5. Klasse, das ein Ja/Nein-Ratespiel spielt (Kategorie: "${topicName}").
+
+${situation}
+
+Formuliere EINE kurze, freundliche Rückfrage auf Deutsch, die das Kind zum Nachdenken anregt und es dazu bringt, selbst eine bessere, eingrenzende Frage zu finden.
+
+WICHTIG:
+- Verrate NICHT die Lösung.
+- Schlage KEINE konkrete neue Frage direkt vor.
+- Sei kurz (maximal 2 Sätze), warm und altersgerecht.
+- Verwende KEINE Fachbegriffe wie "constraint-seeking" oder "Informationsgewinn".
+
+Antworte NUR mit der Rückfrage selbst, ohne Anführungszeichen, ohne zusätzlichen Text.`;
+
+  try {
+    const content = await callOpenAI([
+          { role: "system", content: "Du bist ein warmherziger, sokratischer Lerncoach für Kinder." },
+          { role: "user", content: prompt }
+        ], 0.7); // VERSION 60: mit Wiederholung
+    return content;
+  } catch (err) {
+    safeLog("Sokratische Rückfrage fehlgeschlagen:", err);
+    return "Überleg nochmal: Gibt es eine Frage, die dir hilft, mehrere Möglichkeiten gleichzeitig auszuschliessen?";
+  }
+}
+
+/* ---------- Feedback der SuS ----------
+   Speichert den Feedback-Text (falls vorhanden) direkt in den
+   bereits "eingefrorenen" Daten der Runde (allRoundsData), damit er
+   zusammen mit den übrigen Daten exportiert wird. Leerer Text ist
+   gültig ("nichts aufgefallen").
+------------------------------------------------------------------ */
+function submitRoundFeedback() {
+  const input = document.getElementById("feedbackInput");
+  const text = input.value.trim();
+
+  if (allRoundsData[currentRound]) {
+    allRoundsData[currentRound].feedback = text;
+  }
+
+  input.disabled = true;
+  document.getElementById("feedbackSaveBtn").disabled = true;
+  document.getElementById("feedbackSavedNote").style.display = "inline";
+}
+
+/* ---------- Runde beenden & Auswertung ---------- */
+function endRound(solved, endReason) {
+  roundActive = false;
+  document.getElementById("gameBox").classList.add("hidden");
+
+  // Falls kein Grund explizit übergeben wurde (Absicherung), aus
+  // "solved" ableiten.
+  if (!endReason) endReason = solved ? "geloest" : "unbekannt";
+
+  // Rundendaten "einfrieren" – log/coachingLog/listViewed werden beim
+  // nächsten Rundenstart geleert, daher hier für den späteren Export
+  // gesichert. feedback startet leer und wird erst gefüllt, wenn das
+  // Kind das Feedback-Feld unten abschickt.
+  allRoundsData[currentRound] = {
+    log: [...log],
+    coaching: [...coachingLog],
+    chat: [...chatLog],
+    listViewed: listViewed,
+    secret: secret,
+    solved: solved,
+    endReason: endReason,
+    originalCandidateCount: originalCandidateCount,
+    feedback: ""
+  };
+
+  // Feedback-Feld für diese (neue) Zusammenfassung zurücksetzen –
+  // das Element bleibt über alle drei Runden im DOM bestehen und
+  // muss daher bei jedem Rundenende neu "entsperrt" werden.
+  const feedbackInput = document.getElementById("feedbackInput");
+  feedbackInput.value = "";
+  feedbackInput.disabled = false;
+  document.getElementById("feedbackSaveBtn").disabled = false;
+  document.getElementById("feedbackSavedNote").style.display = "none";
+
+  document.getElementById("summaryHeading").textContent = "Auswertung";
+
+  const total = log.length;
+  const constraintSeeking = log.filter(l => l.typ === "constraint-seeking").length;
+  const hypothesisScanning = log.filter(l => l.typ === "hypothesis-scanning").length;
+  const violations = log.filter(l => l.stopping_rule_verletzt === "ja").length;
+  // WICHTIG: Fälle von vorzeitigem Scannen bzw. fehlendem Informations-
+  // gewinn werden in Runde 2 vom Coach abgefangen (Denkanstoss statt
+  // direkter Antwort) und landen dann NICHT im normalen "log", sondern
+  // im separaten "coachingLog". Damit die Auswertung diese trotzdem
+  // korrekt als "verletzt" zeigt, werden beide Quellen kombiniert.
+  const premature = log.filter(l => l.vorzeitiges_scannen === "ja").length
+    + coachingLog.filter(c => c.grund === "vorzeitiges_scannen").length;
+  const noInfoGainCount = log.filter(l => l.kein_informationsgewinn === "ja").length
+    + coachingLog.filter(c => c.grund === "kein_informationsgewinn").length;
+  const idealRatioText = total > 0 ? `${Math.max(total - 1, 0)} : 1` : "–";
+
+  const endReasonLabels = {
+    geloest: "Gelöst",
+    max_fragen_erreicht: "Maximale Fragenzahl erreicht (20)",
+    manuell_beendet: "Manuell beendet",
+    unbekannt: "Unbekannt"
+  };
+
+  const rows = [
+    ["Gesuchtes Ding", secret],
+    ["Gelöst", solved ? "ja" : "nein"],
+    ["Beendet durch", endReasonLabels[endReason] || endReason],
+    ["Gesamtzahl Fragen", total],
+    ["Constraint-seeking Fragen", constraintSeeking],
+    ["Hypothesis-scanning Fragen", hypothesisScanning],
+    ["Ideales Verhältnis (n−1):1", idealRatioText],
+    ["Stopping-Rule-Verletzung", violations > 0 ? "verletzt" : "nicht verletzt"],
+    ["Vorzeitiges Scannen (Einzelvermutung zu früh)", premature > 0 ? "verletzt" : "nicht verletzt"],
+    ["Fragen ohne Informationsgewinn", noInfoGainCount],
+    ["Kandidatenliste angeschaut", listViewed ? "ja" : "nein"]
+  ];
+
+  if (currentRound === 2) {
+    rows.push(["Coaching-Eingriffe", coachingLog.length]);
+  }
+
+  const table = document.getElementById("summaryTable");
+  table.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("");
+
+  const banner = document.getElementById("congratsBanner");
+  if (solved) {
+    banner.style.display = "block";
+    banner.textContent = `🎉 Gut gemacht! Du hast «${secret}» in ${log.length} Fragen erraten!`;
+    setAvatarMood("celebrating");
+    playWinSound();
+    triggerConfetti();
+  } else {
+    banner.style.display = "none";
+  }
+
+  // Coaching-CSV nur anbieten, wenn es in dieser Runde auch Eingriffe gab
+  // VERSION 59: separater Coaching-Export entfernt (im Gesamt-Export enthalten).
+
+  document.getElementById("summary").style.display = "block";
+}
+
+/* ---------- CSV speichern / teilen ----------
+   Auf iPad/iPhone wird – falls verfügbar – das Teilen-Menü von iOS
+   geöffnet (AirDrop, "In Dateien sichern", Mail …), damit die CSV
+   direkt als Datei weitergegeben werden kann, statt als Tabelle in
+   einem neuen Fenster zu erscheinen. Auf dem Laptop oder wenn das
+   Teilen-Menü nicht unterstützt wird: normaler Download wie bisher.
+   Das vorangestellte "\uFEFF" (BOM) sorgt dafür, dass Excel die
+   Umlaute (ä/ö/ü) korrekt anzeigt.
+------------------------------------------------------------------ */
+async function saveCsvFile(lines, filename) {
+  const content = "\uFEFF" + lines.join("\n");
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+
+  try {
+    const isTouchDevice = /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS meldet sich als Mac
+    if (isTouchDevice && typeof File === "function" && navigator.canShare) {
+      const file = new File([blob], filename, { type: "text/csv" });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      }
+    }
+  } catch (err) {
+    // Abbruch durch Nutzer:in ("AbortError") -> nichts weiter tun
+    if (err && err.name === "AbortError") return;
+    safeLog("Teilen fehlgeschlagen, normaler Download wird verwendet:", err);
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ---------- CSV-Export ---------- */
+function downloadCSV() {
+  const headers = ["Kind", "Fragenummer","Frage","Antwort","Kandidaten_vorher","Kandidaten_vorher_Prozent","Kandidaten_nachher","Kandidaten_nachher_Prozent","Fragetyp","Stopping_Rule_verletzt","Vorzeitiges_Scannen","Kein_Informationsgewinn","Liste_angeschaut_nach_Frage","Beendet_durch","Feedback_SuS"];
+  const lines = [headers.join(";")];
+  const endReason = (allRoundsData[currentRound] && allRoundsData[currentRound].endReason) || "unbekannt";
+  // Zeilenumbrüche im Freitext entfernen, damit die CSV-Zeilenstruktur
+  // (eine Datenzeile pro Zeile) nicht durcheinandergerät.
+  const feedbackRaw = (allRoundsData[currentRound] && allRoundsData[currentRound].feedback) || "";
+  const feedbackClean = feedbackRaw.replace(/[\r\n]+/g, " ").replace(/"/g, '""');
+  // Prozent bezieht sich auf die ursprüngliche Suchraumgrösse dieser
+  // Runde (z. B. 128 bei "Anspruchsvoll"), nicht auf 100 Fragen o. ä.
+  const pct = n => originalCandidateCount > 0 ? (n / originalCandidateCount * 100).toFixed(1) : "";
+
+  log.forEach((l, i) => {
+    const isFirst = i === 0;
+    const isLast = i === log.length - 1;
+
+    // Liste-Info steht nur in der Zeile, die zur Fragenummer gehört,
+    // nach der geöffnet wurde. Wurde vor Frage 1 geöffnet (Fragenummer
+    // 0), landet der Hinweis in der ersten Zeile. Wurde nie geöffnet,
+    // steht "nein" einmalig in der ersten Zeile.
+    let listeField = "";
+    if (listViewed) {
+      if (listViewedAtQuestion === l.nr) {
+        listeField = String(listViewedAtQuestion);
+      } else if (listViewedAtQuestion === 0 && isFirst) {
+        listeField = "vor Frage 1";
+      }
+    } else if (isFirst) {
+      listeField = "nein";
+    }
+
+    lines.push([
+      isFirst ? childName : "",
+      l.nr,
+      '"' + l.frage.replace(/"/g,'""') + '"',
+      l.antwort, l.kandidaten_vorher, pct(l.kandidaten_vorher), l.kandidaten_nachher, pct(l.kandidaten_nachher),
+      l.typ, l.stopping_rule_verletzt, l.vorzeitiges_scannen, l.kein_informationsgewinn,
+      listeField,
+      isLast ? endReason : "",
+      isLast ? ('"' + feedbackClean + '"') : ""
+    ].join(";"));
+  });
+
+  // Falls die Runde ganz ohne Fragen beendet wurde (leeres log), gäbe
+  // es sonst keine Zeile für Kind/Beendet_durch/Feedback – hier wird
+  // dafür eine einzelne Zeile ergänzt, damit nichts verloren geht.
+  if (log.length === 0) {
+    lines.push([
+      childName,
+      "", "", "", "", "", "", "", "", "", "", "",
+      "",
+      endReason,
+      '"' + feedbackClean + '"'
+    ].join(";"));
+  }
+
+  saveCsvFile(lines, `fragekompetenz_${childName}_training.csv`);
+}
+
+/* ---------- VERSION 58: Gesamt-Export (Chatverlauf + Ergebnisse) ----------
+   EINE CSV-Datei mit dem ganzen Chatverlauf: eine Zeile pro Nachricht
+   (Kind, Chatbot, System). Bei Kind-Nachrichten, die als Frage gezählt
+   wurden, stehen in derselben Zeile die Ergebnisse (Antwort, Kandidaten
+   vorher/nachher, Fragetyp, Stopping Rule usw.). Bei Coaching-Eingriffen
+   steht der Grund. Rundenangaben (Kind, Thema, gesuchtes Ding, Ende)
+   stehen in jeder Zeile, damit man in Excel einfach filtern kann.
+   Das Feedback des Kindes erscheint als letzte Zeile.
+   Die bisherigen Exporte (Training, Coaching) bleiben unverändert.
+------------------------------------------------------------------ */
+function downloadFullCSV() {
+  const round = allRoundsData[currentRound] || {};
+  const chat = round.chat || chatLog;
+  const roundLog = round.log || log;
+  const endReason = round.endReason || "unbekannt";
+  const q = v => '"' + String(v == null ? "" : v).replace(/[\r\n]+/g, " ").replace(/"/g, '""') + '"';
+  const pct = n => originalCandidateCount > 0 ? (n / originalCandidateCount * 100).toFixed(1) : "";
+
+  const headers = ["Kind", "Thema", "Gesuchtes_Ding", "Beendet_durch", "Zeile", "Zeit", "Absender", "Nachricht",
+    "Gezaehlt_als_Frage", "Fragenummer", "Antwort", "Kandidaten_vorher", "Kandidaten_vorher_Prozent",
+    "Kandidaten_nachher", "Kandidaten_nachher_Prozent", "Fragetyp", "Stopping_Rule_verletzt",
+    "Vorzeitiges_Scannen", "Kein_Informationsgewinn", "Coaching_Grund", "Liste_angeschaut_nach_Frage",
+    "Antwortquelle", "Antwort_korrigiert"]; // VERSION 60: zwei neue Spalten am Ende
+  const lines = [headers.join(";")];
+
+  const listeInfo = !listViewed ? "nein" : (listViewedAtQuestion === 0 ? "vor Frage 1" : String(listViewedAtQuestion));
+  const base = () => [q(childName), q(topicName), q(round.secret || secret), endReason];
+
+  chat.forEach((c, i) => {
+    const r = c.nr != null ? roundLog.find(l => l.nr === c.nr) : null;
+    const isKid = c.rolle === "Kind";
+    lines.push([
+      ...base(), i + 1, c.zeit, q(c.rolle), q(c.text),
+      isKid ? (r ? "ja" : "nein") : "",
+      r ? r.nr : "", r ? r.antwort : "",
+      r ? r.kandidaten_vorher : "", r ? pct(r.kandidaten_vorher) : "",
+      r ? r.kandidaten_nachher : "", r ? pct(r.kandidaten_nachher) : "",
+      r ? r.typ : "", r ? r.stopping_rule_verletzt : "", r ? r.vorzeitiges_scannen : "",
+      r ? r.kein_informationsgewinn : "", q(c.coaching),
+      i === 0 ? listeInfo : "",
+      r ? q(r.quelle || "") : "", r ? (r.korrigiert || "") : ""
+    ].join(";"));
+  });
+
+  const feedback = round.feedback || "";
+  lines.push([
+    ...base(), chat.length + 1, "", q("Feedback (Kind)"), q(feedback),
+    "", "", "", "", "", "", "", "", "", "", "", '""', "", "", ""
+  ].join(";"));
+
+  saveCsvFile(lines, `fragekompetenz_${childName}_gesamt.csv`);
+}
+
+/* ---------- Coaching-Log-Export ----------
+   Separates CSV: jede Rückfrage, die dem Kind gegeben
+   wurde, inkl. Grund und der Frage, die den Eingriff auslöste.
+------------------------------------------------------------------ */
+function downloadCoachingCSV() {
+  const headers = ["Kind", "Versuch","Frage","Grund","Sokratische_Rueckfrage"];
+  const lines = [headers.join(";")];
+  coachingLog.forEach(c => {
+    lines.push([
+      childName, c.versuch,
+      '"' + c.frage.replace(/"/g,'""') + '"',
+      c.grund,
+      '"' + c.rueckfrage.replace(/"/g,'""') + '"'
+    ].join(";"));
+  });
+  saveCsvFile(lines, `fragekompetenz_${childName}_coaching.csv`);
+}
+
+/* ---------- Chatverlauf-Rückblick ----------
+   Zeigt den kompletten Chat der beendeten Runde nochmal an (read-only),
+   damit Fehlermeldungen im Nachhinein gefunden und gemeldet werden
+   können. Der Chat-Inhalt bleibt im DOM erhalten, nur das gameBox
+   war ausgeblendet – hier wird lediglich eine Kopie angezeigt.
+------------------------------------------------------------------ */
+function showChatReview() {
+  document.getElementById("chatReviewContent").innerHTML = chatDiv.innerHTML;
+  document.getElementById("summary").style.display = "none";
+  document.getElementById("chatReview").classList.remove("hidden");
+}
+
+function hideChatReview() {
+  document.getElementById("chatReview").classList.add("hidden");
+  document.getElementById("summary").style.display = "block";
+}
+
+function resetAll() {
+  currentRound = 1;
+  allRoundsData = { 2: null };
+  lastClassification = null;
+  questionClassifications = {};
+  chatDiv.innerHTML = "";
+  document.getElementById("chatReviewContent").innerHTML = "";
+
+  // PIN-Freischaltung gilt nur pro Kind – für das nächste Kind muss
+  // die Lehrperson die PIN erneut eingeben.
+  teacherModeUnlocked = false;
+  document.getElementById("debugBtn").classList.add("hidden");
+  document.getElementById("chatReviewBtn").classList.add("hidden");
+
+  document.getElementById("summary").style.display = "none";
+  document.getElementById("chatReview").classList.add("hidden");
+  document.getElementById("setupBox").classList.remove("hidden");
+}
+</script>
+
+</body>
+</html>
